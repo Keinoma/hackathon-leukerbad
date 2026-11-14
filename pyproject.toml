@@ -15,6 +15,9 @@ dependencies = [
 ml = [
     "ultralytics>=8.3.0",
 ]
+vlm = [
+    "google-genai>=1.0.0",
+]
 robotics = [
     "pyserial>=3.5",
 ]
