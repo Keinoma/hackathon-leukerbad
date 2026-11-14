@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 SPLITS: tuple[str, ...] = ("train", "val", "test")
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".webp"})
@@ -31,6 +35,39 @@ class ValidationReport:
     duplicate_hashes: list[str] = field(default_factory=list)
     leaked_device_files: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    near_duplicates: list[str] = field(default_factory=list)
+
+
+def compute_dhash(image: np.ndarray, hash_size: int = 8) -> int:
+    """Compute a 64-bit difference hash (dHash) for an image using `cv2` + `numpy`."""
+    if hash_size <= 0:
+        raise ValueError(f"hash_size must be positive, got {hash_size}.")
+    if image.ndim == 3:
+        channels = image.shape[2]
+        if channels == 4:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        elif channels == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        elif channels == 1:
+            gray = image[:, :, 0]
+        else:
+            raise ValueError(f"Unsupported channel count {channels} for dHash computation.")
+    elif image.ndim == 2:
+        gray = image
+    else:
+        raise ValueError(f"Expected 2D or 3D image array, got ndim={image.ndim}.")
+
+    resized = cv2.resize(gray, (hash_size + 1, hash_size), interpolation=cv2.INTER_AREA)
+    diff = resized[:, 1:] > resized[:, :-1]
+    packed = 0
+    for bit in diff.ravel():
+        packed = (packed << 1) | int(bool(bit))
+    return packed
+
+
+def hamming_distance_64(a: int, b: int) -> int:
+    """Compute bit-level Hamming distance between two integer perceptual hashes."""
+    return (a ^ b).bit_count()
 
 
 def _sha256_file(path: Path) -> str:
@@ -45,13 +82,23 @@ def _is_held_out_device_filename(filename: str) -> bool:
     return _HELD_OUT_DEVICE_RE.search(filename) is not None
 
 
-def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
+def validate_yolo_seg_dataset(
+    dataset_root: Path,
+    num_classes: int | None = None,
+    near_dup_max_hamming: int = 6,
+) -> ValidationReport:
     """Validate split uniqueness, unseen-device isolation, and YOLO-seg polygon formatting."""
+    if num_classes is not None and num_classes <= 0:
+        raise ValueError(f"num_classes must be positive when provided, got {num_classes}.")
+    if near_dup_max_hamming < 0:
+        raise ValueError(f"near_dup_max_hamming must be non-negative, got {near_dup_max_hamming}.")
+
     root = Path(dataset_root)
     split_counts: dict[str, int] = {split: 0 for split in SPLITS}
     polygon_count = 0
     bbox_only_count = 0
     duplicate_hashes: list[str] = []
+    near_duplicates: list[str] = []
     leaked_device_files: list[str] = []
     errors: list[str] = []
 
@@ -65,9 +112,11 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
             duplicate_hashes=[],
             leaked_device_files=[],
             errors=errors,
+            near_duplicates=[],
         )
 
     hash_to_locations: dict[str, list[tuple[str, Path]]] = {}
+    perceptual_entries: list[tuple[str, str, str, int]] = []
 
     for split in SPLITS:
         images_dir = root / "images" / split
@@ -75,7 +124,9 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
 
         if images_dir.exists():
             image_files = sorted(
-                p for p in images_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+                p
+                for p in images_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             )
         else:
             image_files = []
@@ -90,6 +141,10 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
 
             file_hash = _sha256_file(img_path)
             hash_to_locations.setdefault(file_hash, []).append((split, img_path))
+
+            decoded = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
+            if decoded is not None:
+                perceptual_entries.append((split, rel_img, file_hash, compute_dhash(decoded)))
 
         if labels_dir.exists():
             label_files = sorted(p for p in labels_dir.glob("*.txt") if p.is_file())
@@ -117,6 +172,13 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
 
                 if class_id < 0:
                     errors.append(f"{rel_lbl}:{line_num}: negative class ID {class_id}")
+                    continue
+
+                if num_classes is not None and class_id >= num_classes:
+                    errors.append(
+                        f"{rel_lbl}:{line_num}: class ID {class_id} exceeds "
+                        f"num_classes={num_classes}"
+                    )
                     continue
 
                 coord_tokens = tokens[1:]
@@ -163,6 +225,19 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
                 f"{rel_paths}"
             )
 
+    for idx_a in range(len(perceptual_entries)):
+        split_a, rel_a, sha_a, dhash_a = perceptual_entries[idx_a]
+        for idx_b in range(idx_a + 1, len(perceptual_entries)):
+            split_b, rel_b, sha_b, dhash_b = perceptual_entries[idx_b]
+            if split_a == split_b or sha_a == sha_b:
+                continue
+            dist = hamming_distance_64(dhash_a, dhash_b)
+            if dist <= near_dup_max_hamming:
+                near_duplicates.append(
+                    f"Near-duplicate across ({split_a}, {split_b}) [hamming={dist}]: "
+                    f"{rel_a} <-> {rel_b}"
+                )
+
     if sum(split_counts.values()) == 0:
         errors.append(f"No images found under {root / 'images'}")
 
@@ -175,6 +250,7 @@ def validate_yolo_seg_dataset(dataset_root: Path) -> ValidationReport:
         duplicate_hashes=duplicate_hashes,
         leaked_device_files=leaked_device_files,
         errors=errors,
+        near_duplicates=near_duplicates,
     )
 
 
@@ -200,3 +276,42 @@ def write_yolo_dataset_yaml(dataset_root: Path, class_names: list[str]) -> Path:
 
     yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return yaml_path
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for validating a YOLO-seg dataset directory."""
+    parser = argparse.ArgumentParser(
+        description="Validate YOLO-seg dataset splits, polygons, class IDs, and dHash near-dups."
+    )
+    parser.add_argument("--dataset", type=Path, required=True, help="Dataset root directory.")
+    parser.add_argument(
+        "--num-classes",
+        type=int,
+        default=None,
+        help="Optional expected class count (flags any class_id >= num_classes).",
+    )
+    parser.add_argument(
+        "--near-dup-hamming",
+        type=int,
+        default=6,
+        help="Max 64-bit dHash Hamming distance for cross-split near-duplicate warnings.",
+    )
+    args = parser.parse_args(argv)
+    report = validate_yolo_seg_dataset(
+        args.dataset,
+        num_classes=args.num_classes,
+        near_dup_max_hamming=args.near_dup_hamming,
+    )
+    print(
+        f"Valid: {report.is_valid} | splits={report.split_counts} | "
+        f"polygons={report.polygon_count} | near_duplicates={len(report.near_duplicates)}"
+    )
+    for warning in report.near_duplicates:
+        print(f"  [WARN] {warning}")
+    for err in report.errors:
+        print(f"  [ERROR] {err}")
+    return 0 if report.is_valid else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

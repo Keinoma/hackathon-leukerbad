@@ -2,8 +2,9 @@
 
 import argparse
 import math
+import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -223,6 +224,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Filter out non-vape detections.",
     )
+    parser.add_argument(
+        "--verify-min",
+        type=float,
+        default=0.20,
+        help="Minimum confidence to trigger VLM verification (default: 0.20).",
+    )
+    parser.add_argument(
+        "--verify-max",
+        type=float,
+        default=0.85,
+        help="Maximum confidence to trigger VLM verification (default: 0.85).",
+    )
+    parser.add_argument(
+        "--verify-every",
+        type=int,
+        default=30,
+        help=(
+            "In --camera mode with VLM verifier, run VLM every N frames "
+            "(0 = only when 'v' is pressed; default: 30)."
+        ),
+    )
     return parser
 
 
@@ -269,6 +291,149 @@ def _save_frame(output_path: Path, frame: np.ndarray) -> bool:
     return ok
 
 
+def _format_camera_snapshot_path(save_path: Path | None, snapshot_index: int) -> Path:
+    """Return a non-overwriting numbered path for interactive camera snapshots."""
+    if save_path is None:
+        return Path(f"leukerbad_snapshot_{snapshot_index:03d}.png")
+    suffix = save_path.suffix or ".png"
+    return save_path.with_name(f"{save_path.stem}_{snapshot_index:03d}{suffix}")
+
+
+@dataclass(frozen=True)
+class _CachedVlmEntry:
+    bounding_box: tuple[int, int, int, int]
+    label: str
+    confidence: float
+    vlm_meta: dict[str, Any] | None
+    raw_yolo_label: str | None
+
+
+def _bbox_iou(
+    box_a: tuple[int, int, int, int],
+    box_b: tuple[int, int, int, int],
+) -> float:
+    ix1 = max(box_a[0], box_b[0])
+    iy1 = max(box_a[1], box_b[1])
+    ix2 = min(box_a[2], box_b[2])
+    iy2 = min(box_a[3], box_b[3])
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if inter <= 0:
+        return 0.0
+    area_a = max(0, box_a[2] - box_a[0]) * max(0, box_a[3] - box_a[1])
+    area_b = max(0, box_b[2] - box_b[0]) * max(0, box_b[3] - box_b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _match_cached_verdict(
+    bbox: tuple[int, int, int, int],
+    cache: list[_CachedVlmEntry],
+) -> _CachedVlmEntry | None:
+    if not cache:
+        return None
+    ax = 0.5 * (bbox[0] + bbox[2])
+    ay = 0.5 * (bbox[1] + bbox[3])
+    best_entry: _CachedVlmEntry | None = None
+    best_score = -1.0
+
+    for entry in cache:
+        cb = entry.bounding_box
+        iou = _bbox_iou(bbox, cb)
+        bx = 0.5 * (cb[0] + cb[2])
+        by = 0.5 * (cb[1] + cb[3])
+        diag = max(1.0, math.hypot(cb[2] - cb[0], cb[3] - cb[1]))
+        norm_dist = math.hypot(ax - bx, ay - by) / diag
+        if iou < 0.30 and norm_dist > 0.50:
+            continue
+        score = iou + max(0.0, 1.0 - norm_dist) * 0.25
+        if score > best_score:
+            best_score = score
+            best_entry = entry
+    return best_entry
+
+
+def _apply_cached_verdicts(
+    raw_detections: list[Detection],
+    cache: list[_CachedVlmEntry],
+) -> list[Detection]:
+    if not cache:
+        return raw_detections
+    merged: list[Detection] = []
+    for det in raw_detections:
+        matched = _match_cached_verdict(det.bounding_box, cache)
+        if matched is None:
+            merged.append(det)
+            continue
+        vlm_info = matched.vlm_meta
+        if vlm_info is not None and not vlm_info.get("verified", False):
+            merged.append(replace(det, metadata={**det.metadata, "vlm": vlm_info}))
+            continue
+        new_meta: dict[str, Any] = {**det.metadata}
+        if matched.raw_yolo_label is not None:
+            new_meta["raw_yolo_label"] = matched.raw_yolo_label
+        elif matched.label != det.label:
+            new_meta["raw_yolo_label"] = det.label
+        if vlm_info is not None:
+            new_meta["vlm"] = {**vlm_info, "cached": True}
+        merged.append(
+            replace(
+                det,
+                label=matched.label,
+                confidence=matched.confidence,
+                metadata=new_meta,
+            )
+        )
+    return merged
+
+
+def _run_vlm_pass_and_build_cache(
+    detector: Detector,
+    frame: np.ndarray,
+) -> tuple[list[Detection], list[_CachedVlmEntry]]:
+    had_reject_attr = hasattr(detector, "reject_non_vapes")
+    orig_reject = bool(getattr(detector, "reject_non_vapes", False))
+    if had_reject_attr and orig_reject:
+        try:
+            detector.reject_non_vapes = False  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            had_reject_attr = False
+    try:
+        verified = detector.detect(frame)
+    finally:
+        if had_reject_attr and orig_reject:
+            detector.reject_non_vapes = orig_reject  # type: ignore[attr-defined]
+
+    cache = [
+        _CachedVlmEntry(
+            bounding_box=det.bounding_box,
+            label=det.label,
+            confidence=det.confidence,
+            vlm_meta=(
+                dict(det.metadata["vlm"])
+                if isinstance(det.metadata.get("vlm"), dict)
+                else None
+            ),
+            raw_yolo_label=(
+                str(det.metadata["raw_yolo_label"])
+                if "raw_yolo_label" in det.metadata
+                else None
+            ),
+        )
+        for det in verified
+    ]
+    if orig_reject:
+        verified = [
+            det
+            for det in verified
+            if not (
+                isinstance(det.metadata.get("vlm"), dict)
+                and det.metadata["vlm"].get("verified") is True
+                and det.metadata["vlm"].get("is_vape") is False
+            )
+        ]
+    return verified, cache
+
+
 def _build_detector(
     args: argparse.Namespace,
     injected_model: Any | None = None,
@@ -284,7 +449,12 @@ def _build_detector(
     if args.verifier == "gemini":
         from leukerbad.detection.vlm_verifier import VlmVerifiedDetector
 
-        detector = VlmVerifiedDetector(detector, reject_non_vapes=args.only_vapes)
+        detector = VlmVerifiedDetector(
+            detector,
+            min_conf_to_verify=args.verify_min,
+            max_conf_to_verify=args.verify_max,
+            reject_non_vapes=args.only_vapes,
+        )
     return detector
 
 
@@ -294,8 +464,20 @@ def _run_camera_loop(detector: Detector, args: argparse.Namespace) -> int:
         print(f"Error: unable to open camera index {args.camera}.", file=sys.stderr)
         return 1
 
-    print("Live camera started — press 'q' to quit, 's' to save snapshot.")
+    print(
+        "Live camera started — press 'q' to quit, 's' to save snapshot, "
+        "'v' to force VLM verify."
+    )
     snapshot_count = 0
+    frame_idx = 0
+    force_verify = False
+    vlm_cache: list[_CachedVlmEntry] = []
+    base_detector: Detector | None = (
+        getattr(detector, "base_detector", None)
+        if getattr(args, "verifier", "none") != "none"
+        else None
+    )
+    verify_every = max(0, int(getattr(args, "verify_every", 30)))
     last_annotated: np.ndarray | None = None
     saved_manually = False
 
@@ -305,8 +487,22 @@ def _run_camera_loop(detector: Detector, args: argparse.Namespace) -> int:
             if not ok or frame is None:
                 break
 
-            detections = detector.detect(frame)
-            if args.only_vapes and args.verifier == "none":
+            ran_vlm = False
+            if base_detector is None:
+                detections = detector.detect(frame)
+            else:
+                should_verify = force_verify or (
+                    verify_every > 0 and frame_idx % verify_every == 0
+                )
+                if should_verify:
+                    detections, vlm_cache = _run_vlm_pass_and_build_cache(detector, frame)
+                    force_verify = False
+                    ran_vlm = True
+                else:
+                    raw_detections = base_detector.detect(frame)
+                    detections = _apply_cached_verdicts(raw_detections, vlm_cache)
+
+            if args.only_vapes:
                 detections = _filter_only_vapes(detections)
 
             annotated = draw_detections(frame, detections)
@@ -316,11 +512,23 @@ def _run_camera_loop(detector: Detector, args: argparse.Namespace) -> int:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
+            if key == ord("v") and base_detector is not None:
+                if not ran_vlm:
+                    detections, vlm_cache = _run_vlm_pass_and_build_cache(detector, frame)
+                    if args.only_vapes:
+                        detections = _filter_only_vapes(detections)
+                    annotated = draw_detections(frame, detections)
+                    last_annotated = annotated
+                    cv2.imshow("Leukerbad Vape & Waste Detection", annotated)
+                else:
+                    force_verify = True
             if key == ord("s"):
                 snapshot_count += 1
-                target = args.save or Path(f"leukerbad_snapshot_{snapshot_count:03d}.png")
+                target = _format_camera_snapshot_path(args.save, snapshot_count)
                 _save_frame(target, annotated)
                 saved_manually = True
+
+            frame_idx += 1
     finally:
         cap.release()
         cv2.destroyAllWindows()
@@ -347,27 +555,45 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    if args.camera is not None:
-        detector = _build_detector(args)
-        return _run_camera_loop(detector, args)
+    if args.verify_every < 0:
+        print("Error: --verify-every must be >= 0.", file=sys.stderr)
+        return 1
 
-    if args.synthetic_demo:
-        frame, synthetic_model = _create_synthetic_demo_scene()
-        injected = None if Path(args.weights).is_file() else synthetic_model
-        detector = _build_detector(args, injected_model=injected)
-    else:
-        if not args.image.is_file():
-            print(f"Error: image file not found: {args.image}", file=sys.stderr)
-            return 1
-        loaded = cv2.imread(str(args.image))
-        if loaded is None:
-            print(f"Error: failed to decode image: {args.image}", file=sys.stderr)
-            return 1
-        frame = loaded
-        detector = _build_detector(args)
+    if args.verifier == "gemini" and not (
+        os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    ):
+        print(
+            "Error: --verifier gemini requires GEMINI_API_KEY or GOOGLE_API_KEY "
+            "to be set in the environment.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        if args.camera is not None:
+            detector = _build_detector(args)
+            return _run_camera_loop(detector, args)
+
+        if args.synthetic_demo:
+            frame, synthetic_model = _create_synthetic_demo_scene()
+            injected = None if Path(args.weights).is_file() else synthetic_model
+            detector = _build_detector(args, injected_model=injected)
+        else:
+            if not args.image.is_file():
+                print(f"Error: image file not found: {args.image}", file=sys.stderr)
+                return 1
+            loaded = cv2.imread(str(args.image))
+            if loaded is None:
+                print(f"Error: failed to decode image: {args.image}", file=sys.stderr)
+                return 1
+            frame = loaded
+            detector = _build_detector(args)
+    except (ImportError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     detections = detector.detect(frame)
-    if args.only_vapes and args.verifier == "none":
+    if args.only_vapes:
         detections = _filter_only_vapes(detections)
 
     _print_detection_summary(detections)

@@ -1,6 +1,10 @@
 """Unit tests for the multimodal VLM lookalike verifier wrapper."""
 
+import importlib.machinery
+import importlib.util
 import json
+import sys
+import types
 from dataclasses import dataclass
 from typing import Any
 
@@ -198,17 +202,44 @@ def test_true_unseen_vape_promoted_with_blended_confidence_and_hazard_metadata()
     }
 
 
+def _ensure_google_genai_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register stub `google.genai` module specs when running in a bare `--extra dev` env."""
+    try:
+        has_real = importlib.util.find_spec("google.genai") is not None
+    except (ModuleNotFoundError, ValueError):
+        has_real = False
+    if has_real:
+        return
+
+    google_mod = sys.modules.get("google")
+    if google_mod is None:
+        google_mod = types.ModuleType("google")
+        google_mod.__path__ = []  # type: ignore[attr-defined]
+        google_mod.__spec__ = importlib.machinery.ModuleSpec(
+            "google",
+            loader=None,
+            is_package=True,
+        )
+        monkeypatch.setitem(sys.modules, "google", google_mod)
+
+    genai_mod = types.ModuleType("google.genai")
+    genai_mod.__spec__ = importlib.machinery.ModuleSpec("google.genai", loader=None)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
+    monkeypatch.setattr(google_mod, "genai", genai_mod, raising=False)
+
+
 def test_confidence_band_filtering_skips_vlm_call() -> None:
     low_det = Detection(label="vape", confidence=0.12, bounding_box=(10, 10, 40, 40))
-    high_det = Detection(label="vape", confidence=0.95, bounding_box=(50, 50, 90, 90))
+    high_det = Detection(label="vape", confidence=0.90, bounding_box=(50, 50, 90, 90))
     client = _FakeGenAiClient([])
 
+    # Uses default max_conf_to_verify=0.85 so high-confidence (> 0.85) skips VLM by default
     verifier = VlmVerifiedDetector(
         base_detector=_StubDetector([low_det, high_det]),
         min_conf_to_verify=0.25,
-        max_conf_to_verify=0.85,
         client=client,
     )
+    assert verifier.max_conf_to_verify == pytest.approx(0.85)
     results = verifier.detect(_sample_frame())
 
     assert len(results) == 2
@@ -220,6 +251,7 @@ def test_confidence_band_filtering_skips_vlm_call() -> None:
 def test_missing_api_key_and_network_error_fallback_gracefully(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _ensure_google_genai_spec(monkeypatch)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 
@@ -264,3 +296,58 @@ def test_missing_api_key_and_network_error_fallback_gracefully(
         "verified": False,
         "reason": "error:JSONDecodeError",
     }
+
+
+def test_init_raises_import_error_when_google_genai_missing_and_no_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    with pytest.raises(ImportError, match="uv sync --extra vlm"):
+        VlmVerifiedDetector(base_detector=_StubDetector([]), client=None)
+
+    def _raise_missing_parent(name: str) -> None:
+        raise ModuleNotFoundError(f"No module named '{name.partition('.')[0]}'")
+
+    monkeypatch.setattr(importlib.util, "find_spec", _raise_missing_parent)
+    with pytest.raises(ImportError, match="uv sync --extra vlm"):
+        VlmVerifiedDetector(base_detector=_StubDetector([]), client=None)
+
+
+def test_injected_client_works_without_google_genai_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "google.genai", None)
+    monkeypatch.setitem(sys.modules, "google.genai.types", None)
+
+    det = Detection(label="vape", confidence=0.50, bounding_box=(10, 10, 50, 50))
+    verdict_json = json.dumps(
+        {
+            "is_vape": False,
+            "detected_object": "bic_lighter",
+            "confidence": 0.91,
+            "hazard_note": "Gas lighter lookalike",
+        }
+    )
+    client = _FakeGenAiClient([verdict_json])
+    verifier = VlmVerifiedDetector(
+        base_detector=_StubDetector([det]),
+        client=client,
+    )
+    results = verifier.detect(_sample_frame())
+
+    assert len(results) == 1
+    assert results[0].label == "non_vape:bic_lighter"
+    assert len(client.models.calls) == 1
+    image_part = client.models.calls[0]["contents"][0]
+    assert image_part.mime_type == "image/jpeg"
+    assert isinstance(image_part.data, bytes)
+
+
+def test_invalid_confidence_bounds_raise_value_error() -> None:
+    with pytest.raises(ValueError, match="min_conf_to_verify"):
+        VlmVerifiedDetector(
+            base_detector=_StubDetector([]),
+            min_conf_to_verify=0.90,
+            max_conf_to_verify=0.40,
+            client=_FakeGenAiClient([]),
+        )

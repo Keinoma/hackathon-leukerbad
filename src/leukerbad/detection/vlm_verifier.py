@@ -1,8 +1,10 @@
 """Multimodal VLM verification wrapper for filtering tabletop vape lookalikes."""
 
+import importlib.util
 import json
 import os
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 from typing import Any
 
 import cv2
@@ -109,6 +111,14 @@ def _parse_verdict_json(raw_text: str) -> VlmVerdict:
     )
 
 
+def _has_google_genai() -> bool:
+    """Return True if ``google.genai`` is importable without importing it eagerly."""
+    try:
+        return importlib.util.find_spec("google.genai") is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
 class VlmVerifiedDetector:
     """Two-stage detector that verifies ambiguous YOLO crops with Gemini VLM."""
 
@@ -118,11 +128,22 @@ class VlmVerifiedDetector:
         model_name: str = "gemini-2.5-flash",
         api_key: str | None = None,
         min_conf_to_verify: float = 0.20,
-        max_conf_to_verify: float = 1.0,
+        max_conf_to_verify: float = 0.85,
         padding_ratio: float = 0.20,
         reject_non_vapes: bool = False,
         client: Any | None = None,
     ) -> None:
+        if not (0.0 <= min_conf_to_verify <= max_conf_to_verify <= 1.0):
+            raise ValueError(
+                "Confidence bounds must satisfy "
+                "0.0 <= min_conf_to_verify <= max_conf_to_verify <= 1.0"
+            )
+        if client is None and not _has_google_genai():
+            raise ImportError(
+                "google-genai is required for VlmVerifiedDetector. "
+                "Install with: uv sync --extra vlm"
+            )
+
         self.base_detector = base_detector
         self.model_name = model_name
         self.api_key = (
@@ -137,26 +158,41 @@ class VlmVerifiedDetector:
     def _get_or_create_client(self) -> Any:
         if self._client is not None:
             return self._client
-        from google import genai
+        try:
+            from google import genai
+        except ImportError as exc:
+            raise ImportError(
+                "google-genai is required for VlmVerifiedDetector. "
+                "Install with: uv sync --extra vlm"
+            ) from exc
 
         self._client = genai.Client(api_key=self.api_key)
         return self._client
 
     def _verify_crop(self, jpeg_bytes: bytes, det: Detection) -> VlmVerdict:
-        from google.genai import types
-
         client = self._get_or_create_client()
-        image_part = types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+        try:
+            from google.genai import types
+        except ImportError:
+            image_part: Any = SimpleNamespace(data=jpeg_bytes, mime_type="image/jpeg")
+            config: Any = SimpleNamespace(
+                system_instruction=_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                temperature=0.0,
+            )
+        else:
+            image_part = types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
+            config = types.GenerateContentConfig(
+                system_instruction=_SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                temperature=0.0,
+            )
+
         user_prompt = (
             f"Stage-1 detector proposed label='{det.label}' (confidence={det.confidence:.2f}). "
             "Inspect mouthpieces, airflow holes, LED caps, seams, and clips to determine "
             "whether this object is a real vape/e-cigarette/puff or a benign lookalike "
             "(AirPods/earbud case, pen, highlighter, marker, lipstick, USB stick, BIC lighter)."
-        )
-        config = types.GenerateContentConfig(
-            system_instruction=_SYSTEM_INSTRUCTION,
-            response_mime_type="application/json",
-            temperature=0.0,
         )
         response = client.models.generate_content(
             model=self.model_name,
@@ -208,6 +244,8 @@ class VlmVerifiedDetector:
                 if not encoded_ok:
                     raise RuntimeError("cv2.imencode failed for ROI crop")
                 verdict = self._verify_crop(encoded_buf.tobytes(), det)
+            except ImportError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 verified_detections.append(
                     replace(

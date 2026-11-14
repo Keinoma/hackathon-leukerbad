@@ -215,7 +215,9 @@ def upgrade_bbox_labels_with_sam(
             poly_px = _extract_polygon_from_sam_results(sam_results)
 
             if poly_px is not None and poly_px.shape[0] >= 3:
-                out_lines.append(polygon_px_to_yolo_seg_line(parsed.class_id, poly_px, img_w, img_h))
+                out_lines.append(
+                    polygon_px_to_yolo_seg_line(parsed.class_id, poly_px, img_w, img_h)
+                )
                 stats["upgraded_bboxes"] += 1
             else:
                 box_poly = np.array(
@@ -232,13 +234,32 @@ def upgrade_bbox_labels_with_sam(
     return stats
 
 
+def is_class_key_allowed(cls_id: int, num_classes: int) -> bool:
+    """Return True if interactive class key `cls_id` is permitted under `num_classes`."""
+    if num_classes < 1:
+        raise ValueError(f"num_classes must be >= 1, got {num_classes}.")
+    return 0 <= cls_id < num_classes
+
+
+def _format_class_hud_keys(num_classes: int) -> str:
+    if num_classes < 1:
+        raise ValueError(f"num_classes must be >= 1, got {num_classes}.")
+    if num_classes == 1:
+        return "[0] vape"
+    return "[0] vape [1] non_vape"
+
+
 def run_interactive_annotator(
     images_dir: Path,
     labels_dir: Path,
     sam_weights: str = "sam2.1_b.pt",
     sam_model: Any | None = None,
+    num_classes: int = 1,
 ) -> int:
-    """Interactive 1-click SAM point annotator: click object -> 0=vape / 1=non_vape."""
+    """Interactive 1-click SAM point annotator: click object -> 0=vape (and 1=non_vape if nc>=2)."""
+    if num_classes < 1:
+        raise ValueError(f"num_classes must be >= 1, got {num_classes}.")
+
     img_root = Path(images_dir)
     lbl_root = Path(labels_dir)
     lbl_root.mkdir(parents=True, exist_ok=True)
@@ -251,6 +272,7 @@ def run_interactive_annotator(
 
     model = sam_model if sam_model is not None else _load_sam_model(sam_weights)
     window_name = "Leukerbad 1-Click SAM Annotator"
+    class_keys_hud = _format_class_hud_keys(num_classes)
 
     pending_poly_px: np.ndarray | None = None
     click_xy: tuple[int, int] | None = None
@@ -281,10 +303,13 @@ def run_interactive_annotator(
             saved_lines: list[str] = []
             if lbl_path.exists():
                 saved_lines = [
-                    ln.strip() for ln in lbl_path.read_text(encoding="utf-8").splitlines() if ln.strip()
+                    ln.strip()
+                    for ln in lbl_path.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()
                 ]
             pending_poly_px = None
             click_xy = None
+            warning_banner = ""
 
             while True:
                 canvas = loaded.copy()
@@ -299,7 +324,7 @@ def run_interactive_annotator(
 
                 hud = (
                     f"[{idx + 1}/{len(image_files)}] {img_path.name} (saved={len(saved_lines)}) | "
-                    "Click->SAM | [0] vape [1] non_vape [b] empty_bg [u] undo [n/p] nav [q] quit"
+                    f"Click->SAM | {class_keys_hud} [b] empty_bg [u] undo [n/p] nav [q] quit"
                 )
                 cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 38), (20, 20, 20), -1)
                 cv2.putText(
@@ -312,6 +337,18 @@ def run_interactive_annotator(
                     1,
                     cv2.LINE_AA,
                 )
+                if warning_banner:
+                    cv2.rectangle(canvas, (0, 38), (canvas.shape[1], 68), (20, 20, 120), -1)
+                    cv2.putText(
+                        canvas,
+                        warning_banner,
+                        (10, 58),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (120, 200, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
                 cv2.imshow(window_name, canvas)
 
                 key = cv2.waitKey(20) & 0xFF
@@ -319,16 +356,26 @@ def run_interactive_annotator(
                     return 0
                 if key in (ord("0"), ord("1")) and pending_poly_px is not None:
                     cls_id = 0 if key == ord("0") else 1
+                    if not is_class_key_allowed(cls_id, num_classes):
+                        warning_banner = (
+                            f"Warning: key [{cls_id}] refused (num_classes={num_classes}); "
+                            "use --num-classes 2 for non_vape."
+                        )
+                        print(warning_banner)
+                        continue
+                    warning_banner = ""
                     line = polygon_px_to_yolo_seg_line(cls_id, pending_poly_px, img_w, img_h)
                     saved_lines.append(line)
                     lbl_path.write_text("\n".join(saved_lines) + "\n", encoding="utf-8")
                     pending_poly_px = None
                     click_xy = None
                 elif key == ord("b"):
+                    warning_banner = ""
                     saved_lines = []
                     lbl_path.write_text("", encoding="utf-8")
                     pending_poly_px = None
                 elif key == ord("u") and saved_lines:
+                    warning_banner = ""
                     saved_lines.pop()
                     content = "\n".join(saved_lines) + ("\n" if saved_lines else "")
                     lbl_path.write_text(content, encoding="utf-8")
@@ -365,9 +412,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--interactive",
         action="store_true",
-        help="Launch interactive 1-click OpenCV point annotator (0=vape, 1=non_vape).",
+        help="Launch interactive 1-click OpenCV point annotator (0=vape, 1=non_vape with nc=2).",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--num-classes",
+        type=int,
+        default=1,
+        help=(
+            "Number of classes for interactive annotation (default: 1 = vape only, "
+            "lookalikes left as background; 2 = allow key 1 for non_vape)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.num_classes < 1:
+        parser.error("--num-classes must be >= 1.")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -378,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
             images_dir=args.images,
             labels_dir=args.labels,
             sam_weights=args.weights,
+            num_classes=args.num_classes,
         )
 
     out_dir = args.output_labels if args.output_labels is not None else args.labels
