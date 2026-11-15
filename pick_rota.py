@@ -2,12 +2,16 @@ import sys, time
 import numpy as np
 import common
 from common import *
+from utils import *
 from urdf_ik import SO101Kin
 
+# Orientation de la pince : angle (deg) = shoulder_pan + ROLL_SIGN * wrist_roll
+# (wrist_roll = 0 -> la pince est orientée comme le bras ; l'angle passé en argument vaut alors shoulder_pan).
+# Si la pince tourne du mauvais côté, passe ROLL_SIGN à -1.0. ROLL_OFFSET (deg) sert au réglage fin.
+ROLL_SIGN = -1.0
+ROLL_OFFSET = 10.0
 
-ROLL_SIGN = 1.0
-ROLL_OFFSET = -30.0
-
+# Sécurités assouplies pour les essais
 IK_TOL = 0.025            # m : erreur IK tolérée (5 mm avant)
 
 # Pince (échelle 0-100 de LeRobot : 0 = fermée, 100 = ouverte) -> À AJUSTER selon ton robot / l'objet
@@ -62,6 +66,19 @@ try:
     sol[ARM.index("wrist_flex")] += wrist_corr
     print(f"correction wrist_flex = {wrist_corr:+.2f} deg (WRIST_K = {WRIST_K})")
 
+    # --- wrist_roll pour obtenir l'orientation demandée : ANGLE = pan + ROLL_SIGN * roll ---
+    i_pan, i_roll = ARM.index("shoulder_pan"), ARM.index("wrist_roll")
+    roll = ROLL_SIGN * (ANGLE - sol[i_pan]) + ROLL_OFFSET
+    roll = (roll + 90.0) % 180.0 - 90.0           # la pince est symétrique : on ramène dans [-90, 90)
+    candidats = [r for r in (roll, roll - 180.0, roll + 180.0) if kin.lo[i_roll] <= r <= kin.hi[i_roll]]
+    if not candidats:
+        raise SystemExit(f"REFUSÉ : wrist_roll = {roll:.1f} deg hors des limites [{kin.lo[i_roll]:.0f}, {kin.hi[i_roll]:.0f}].")
+    sol[i_roll] = min(candidats, key=abs)
+    print(f"orientation demandée {ANGLE:.1f} deg avec shoulder_pan = {sol[i_pan]:.1f} -> wrist_roll = {sol[i_roll]:.1f} deg")
+    delta = sol - q_now
+    print("pose actuelle (deg):", dict(zip(ARM, np.round(q_now, 1))), "xyz =", np.round(p_now, 3))
+    print("pose cible    (deg):", dict(zip(ARM, np.round(sol, 1))), "xyz =", np.round(target, 3))
+    print("variation     (deg):", dict(zip(ARM, np.round(delta, 1))), f"| erreur IK {err*1000:.2f} mm | inclinaison pince {tilt:.1f} deg")
 
     print(f"variation max : {np.max(np.abs(delta)):.1f} deg (limite {MAX_DELTA_DEG})")
     if err > IK_TOL:
@@ -78,10 +95,16 @@ try:
                          "et la cible. Rapproche WAIT de la zone de travail (record_pose.py) "
                          "ou augmente MAX_DELTA_DEG.")
 
-    input("Entrée pour aller saisir l'objet (Ctrl+C pour annuler)...")
+    # Rotation du poignet seule, depuis WAIT, avant d'amorcer la descente
+    input("Entrée pour orienter le poignet (wrist_roll) (Ctrl+C pour annuler)...")
+    move_to(robot, {"wrist_roll": sol[ARM.index("wrist_roll")]})
+    time.sleep(0.5)
+
+    input("Entrée pour descendre saisir l'objet (Ctrl+C pour annuler)...")
     move_to(robot, dict(zip(ARM, sol)), duration_s=DUREE)   # la pince reste ouverte pendant la descente
     time.sleep(0.5)
 
+    descend_z(robot, kin, MARGE)
     print("Fermeture de la pince...")
     set_gripper(GRIPPER_CLOSED)
     time.sleep(0.5)
@@ -89,8 +112,12 @@ try:
     # Retour à la pose d'attente en gardant l'objet
     if common.WAIT is not None:
         move_to(robot, {**common.WAIT, "gripper": GRIPPER_CLOSED})
+    if common.POUBELLE is not None:
+        move_to(robot, {**common.POUBELLE, "gripper": GRIPPER_CLOSED})
     input("Entrée pour relâcher l'objet et terminer (le bras reviendra au repos)...")
     set_gripper(GRIPPER_OPEN)
     time.sleep(0.5)
 finally:
     safe_disconnect(robot)
+
+

@@ -1,6 +1,8 @@
 import sys, time
 import numpy as np
+import common
 from common import *
+from utils import *
 from urdf_ik import SO101Kin
 
 # AVEC ROTA
@@ -14,8 +16,6 @@ x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 robot = connect()
-
-import common
 
 
 def set_gripper(value):
@@ -74,6 +74,7 @@ try:
     move_to(robot, dict(zip(ARM, sol)), duration_s=DUREE)   # la pince reste ouverte pendant la descente
     time.sleep(0.5)
 
+    descend_z(robot, kin, MARGE)
     print("Fermeture de la pince...")
     set_gripper(GRIPPER_CLOSED)
     time.sleep(0.5)

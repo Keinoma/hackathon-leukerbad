@@ -20,3 +20,4 @@ try:
         print("A COPIER :  POSE =", d)
 finally:
     robot.disconnect()
+ 
