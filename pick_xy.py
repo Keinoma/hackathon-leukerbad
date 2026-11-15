@@ -50,7 +50,7 @@ try:
 
     sol, err, tilt = kin.ik_down(target, q_now)
     sol = np.array(sol, dtype=float)
-    wrist_corr = WRIST_K * (x_org**2 + y_org**2)
+    wrist_corr = WRIST_K * (x**2 + y**2)
     sol[ARM.index("wrist_flex")] += wrist_corr
     print(f"correction wrist_flex = {wrist_corr:+.2f} deg (WRIST_K = {WRIST_K})")
     delta = sol - q_now
