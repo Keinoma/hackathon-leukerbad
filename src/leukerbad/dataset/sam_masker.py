@@ -146,12 +146,50 @@ def _extract_polygon_from_sam_results(results: Any) -> np.ndarray | None:
     return None
 
 
+def _extract_polygons_for_bboxes(results: Any, expected_count: int) -> list[np.ndarray | None]:
+    """Extract one `(N, 2)` pixel polygon per prompted bbox from Ultralytics SAM output."""
+    if expected_count <= 0:
+        return []
+    if expected_count == 1:
+        return [_extract_polygon_from_sam_results(results)]
+    if not results:
+        return [None] * expected_count
+
+    first = results[0]
+    masks = getattr(first, "masks", None)
+    if masks is None:
+        return [None] * expected_count
+
+    xy_list = getattr(masks, "xy", None)
+    if xy_list is not None and len(xy_list) == expected_count:
+        extracted: list[np.ndarray | None] = []
+        for poly in xy_list:
+            arr = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+            extracted.append(arr if arr.shape[0] >= 3 else None)
+        return extracted
+
+    raw_data = getattr(masks, "data", None)
+    if raw_data is not None:
+        mask_arr = raw_data.cpu().numpy() if hasattr(raw_data, "cpu") else np.asarray(raw_data)
+        if mask_arr.ndim == 3 and mask_arr.shape[0] == expected_count:
+            out: list[np.ndarray | None] = []
+            for idx in range(expected_count):
+                binary = (mask_arr[idx] > 0.5).astype(np.uint8) * 255
+                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                valid = [c.reshape(-1, 2).astype(np.float32) for c in contours if len(c) >= 3]
+                out.append(max(valid, key=lambda p: float(cv2.contourArea(p))) if valid else None)
+            return out
+
+    return [None] * expected_count
+
+
 def upgrade_bbox_labels_with_sam(
     images_dir: Path,
     labels_dir: Path,
     output_labels_dir: Path,
     sam_weights: str = "sam2.1_b.pt",
     sam_model: Any | None = None,
+    log_every: int = 250,
 ) -> dict[str, int]:
     """Upgrade 4-number YOLO bboxes to tight SAM instance polygons, keeping existing polygons."""
     img_root = Path(images_dir)
@@ -173,9 +211,10 @@ def upgrade_bbox_labels_with_sam(
     image_files = sorted(
         p for p in img_root.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
     )
+    total_images = len(image_files)
     model = sam_model
 
-    for img_path in image_files:
+    for img_idx, img_path in enumerate(image_files, start=1):
         image = cv2.imread(str(img_path))
         if image is None:
             continue
@@ -196,40 +235,63 @@ def upgrade_bbox_labels_with_sam(
             stats["background_images"] += 1
             continue
 
-        out_lines: list[str] = []
-        for raw_line in non_empty_lines:
-            parsed = parse_yolo_label_line(raw_line)
+        parsed_items = [parse_yolo_label_line(raw_line) for raw_line in non_empty_lines]
+        out_slots: list[str | None] = [None] * len(parsed_items)
+        pending_bbox_indices: list[int] = []
+        pending_bboxes_px: list[list[float]] = []
+
+        for slot_idx, parsed in enumerate(parsed_items):
             if parsed.kind == "polygon":
                 clamped = [min(max(val, 0.0), 1.0) for val in parsed.values]
                 coord_str = " ".join(f"{val:.6f}" for val in clamped)
-                out_lines.append(f"{parsed.class_id} {coord_str}")
+                out_slots[slot_idx] = f"{parsed.class_id} {coord_str}"
                 stats["kept_polygons"] += 1
-                continue
+            else:
+                cx, cy, bw, bh = parsed.values
+                x1, y1, x2, y2 = yolo_bbox_to_xyxy_px(cx, cy, bw, bh, img_w, img_h)
+                pending_bbox_indices.append(slot_idx)
+                pending_bboxes_px.append([x1, y1, x2, y2])
 
+        if pending_bboxes_px:
             if model is None:
                 model = _load_sam_model(sam_weights)
+            sam_results = model.predict(image, bboxes=pending_bboxes_px, verbose=False)
+            polys = _extract_polygons_for_bboxes(sam_results, len(pending_bboxes_px))
 
-            cx, cy, bw, bh = parsed.values
-            x1, y1, x2, y2 = yolo_bbox_to_xyxy_px(cx, cy, bw, bh, img_w, img_h)
-            sam_results = model.predict(image, bboxes=[[x1, y1, x2, y2]], verbose=False)
-            poly_px = _extract_polygon_from_sam_results(sam_results)
+            if len(pending_bboxes_px) > 1 and all(p is None for p in polys):
+                polys = [
+                    _extract_polygon_from_sam_results(
+                        model.predict(image, bboxes=[bbox_px], verbose=False)
+                    )
+                    for bbox_px in pending_bboxes_px
+                ]
 
-            if poly_px is not None and poly_px.shape[0] >= 3:
-                out_lines.append(
-                    polygon_px_to_yolo_seg_line(parsed.class_id, poly_px, img_w, img_h)
-                )
-                stats["upgraded_bboxes"] += 1
-            else:
-                box_poly = np.array(
-                    [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
-                    dtype=np.float32,
-                )
-                out_lines.append(
-                    polygon_px_to_yolo_seg_line(parsed.class_id, box_poly, img_w, img_h)
-                )
-                stats["fallback_boxes"] += 1
+            for slot_idx, bbox_px, poly_px in zip(
+                pending_bbox_indices, pending_bboxes_px, polys, strict=True
+            ):
+                cls_id = parsed_items[slot_idx].class_id
+                if poly_px is not None and poly_px.shape[0] >= 3:
+                    out_slots[slot_idx] = polygon_px_to_yolo_seg_line(cls_id, poly_px, img_w, img_h)
+                    stats["upgraded_bboxes"] += 1
+                else:
+                    x1, y1, x2, y2 = bbox_px
+                    box_poly = np.array(
+                        [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+                        dtype=np.float32,
+                    )
+                    out_slots[slot_idx] = polygon_px_to_yolo_seg_line(
+                        cls_id, box_poly, img_w, img_h
+                    )
+                    stats["fallback_boxes"] += 1
 
+        out_lines = [line for line in out_slots if line is not None]
         dst_lbl_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+
+        if log_every > 0 and img_idx % log_every == 0:
+            print(
+                f"[SAM 2] {img_idx}/{total_images} images | "
+                f"upgraded_bboxes={stats['upgraded_bboxes']} background={stats['background_images']}"
+            )
 
     return stats
 

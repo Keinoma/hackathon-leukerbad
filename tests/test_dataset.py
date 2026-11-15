@@ -448,3 +448,247 @@ def test_colab_notebook_is_valid_nbformat_v4() -> None:
     assert "copy_paste=0.2" in full_source
     assert "epochs=25" in full_source
     assert 'split="test"' in full_source
+
+
+def test_colab_train_prepares_flat_vape_yolo_zip_and_caches_to_drive(tmp_path: Path) -> None:
+    import zipfile
+
+    from leukerbad.dataset.colab_train import prepare_and_train_from_drive
+
+    raw_export = tmp_path / "staging" / "public_data" / "exports" / "vape_yolo"
+    (raw_export / "images").mkdir(parents=True)
+    (raw_export / "labels").mkdir(parents=True)
+
+    rng = np.random.default_rng(123)
+    manifest_lines: list[str] = []
+    for idx in range(12):
+        stem = f"sample_{idx:03d}"
+        img = rng.integers(0, 255, size=(80, 100, 3), dtype=np.uint8)
+        cv2.imwrite(str(raw_export / "images" / f"{stem}.png"), img)
+        is_neg = idx % 4 == 0
+        lbl_text = "" if is_neg else "0 0.5 0.5 0.4 0.3\n0 0.25 0.25 0.2 0.2\n"
+        (raw_export / "labels" / f"{stem}.txt").write_text(lbl_text, encoding="utf-8")
+        manifest_lines.append(
+            json.dumps(
+                {
+                    "filename": f"{stem}.png",
+                    "source": "roboflow_primary" if idx < 8 else "kaggle_train",
+                    "is_negative": is_neg,
+                }
+            )
+        )
+    (raw_export / "manifest.jsonl").write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+
+    drive_dir = tmp_path / "HACKLEUK"
+    drive_dir.mkdir()
+    zip_path = drive_dir / "vape_yolo.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for file_path in raw_export.rglob("*"):
+            if file_path.is_file():
+                zf.write(file_path, file_path.relative_to(tmp_path / "staging"))
+
+    class _BatchFakeMasks:
+        def __init__(self, n: int) -> None:
+            self.xy = [
+                np.array([[15.0, 20.0], [55.0, 20.0], [55.0, 50.0], [15.0, 50.0]], dtype=np.float32)
+                for _ in range(n)
+            ]
+
+    class _BatchFakeResult:
+        def __init__(self, n: int) -> None:
+            self.masks = _BatchFakeMasks(n)
+
+    class _BatchFakeSam:
+        def predict(self, _image: np.ndarray, bboxes: list[list[float]], verbose: bool = False):
+            del verbose
+            return [_BatchFakeResult(len(bboxes))]
+
+    work_dir = tmp_path / "work"
+    yaml_path = prepare_and_train_from_drive(
+        drive_dir=drive_dir,
+        work_dir=work_dir,
+        sam_model=_BatchFakeSam(),
+        skip_train=True,
+    )
+    assert yaml_path.is_file()
+    assert (drive_dir / "vape_yolo_seg_cache.zip").is_file()
+
+    report = validate_yolo_seg_dataset(work_dir / "vape_yolo_seg", num_classes=1)
+    assert report.is_valid is True
+    assert sum(report.split_counts.values()) == 12
+    assert report.polygon_count == 18
+
+
+def test_normalize_yolo_dataset_preserves_existing_splits_and_carves_missing_val(
+    tmp_path: Path,
+) -> None:
+    from leukerbad.dataset.colab_train import normalize_yolo_dataset_splits
+
+    rng = np.random.default_rng(999)
+
+    # Case 1: Roboflow pre-split with train/, valid/, and test/ -> preserves exact assignments
+    rf_presplit = tmp_path / "rf_presplit"
+    for sp, count in (("train", 4), ("valid", 2), ("test", 2)):
+        (rf_presplit / sp / "images").mkdir(parents=True)
+        (rf_presplit / sp / "labels").mkdir(parents=True)
+        for i in range(count):
+            img = rng.integers(0, 255, size=(48, 64, 3), dtype=np.uint8)
+            cv2.imwrite(str(rf_presplit / sp / "images" / f"{sp}_{i}.png"), img)
+            (rf_presplit / sp / "labels" / f"{sp}_{i}.txt").write_text(
+                "0 0.5 0.5 0.3 0.3\n", encoding="utf-8"
+            )
+
+    out_presplit = tmp_path / "out_presplit"
+    counts_1 = normalize_yolo_dataset_splits(rf_presplit, out_presplit)
+    assert counts_1 == {"train": 4, "val": 2, "test": 2}
+    assert (out_presplit / "images" / "val" / "valid_0.png").is_file()
+    assert (out_presplit / "images" / "test" / "test_1.png").is_file()
+
+    # Case 2: Roboflow train-only export (like `puff pile.v1i.yolo26.zip`) -> carves val & test
+    rf_train_only = tmp_path / "rf_train_only"
+    (rf_train_only / "train" / "images").mkdir(parents=True)
+    (rf_train_only / "train" / "labels").mkdir(parents=True)
+    for i in range(20):
+        img = rng.integers(0, 255, size=(48, 64, 3), dtype=np.uint8)
+        cv2.imwrite(str(rf_train_only / "train" / "images" / f"puff_{i:02d}.png"), img)
+        lbl = "" if i % 5 == 0 else "0 0.4 0.5 0.2 0.6\n"
+        (rf_train_only / "train" / "labels" / f"puff_{i:02d}.txt").write_text(
+            lbl, encoding="utf-8"
+        )
+
+    out_carved = tmp_path / "out_carved"
+    counts_2 = normalize_yolo_dataset_splits(rf_train_only, out_carved)
+    assert sum(counts_2.values()) == 20
+    assert counts_2["train"] >= 14
+    assert counts_2["val"] >= 2
+    assert counts_2["test"] >= 1
+
+
+def test_colab_train_prefers_unzipped_vape_yolo_folder_over_sibling_zip(tmp_path: Path) -> None:
+    import zipfile
+
+    from leukerbad.dataset.colab_train import prepare_and_train_from_drive
+
+    drive_dir = tmp_path / "HACKLEUK"
+    vape_dir = drive_dir / "public_data" / "exports" / "vape_yolo"
+    (vape_dir / "images").mkdir(parents=True)
+    (vape_dir / "labels").mkdir(parents=True)
+
+    rng = np.random.default_rng(77)
+    manifest_rows: list[str] = []
+    for i in range(10):
+        stem = f"vape_{i:02d}"
+        img = rng.integers(0, 255, size=(64, 80, 3), dtype=np.uint8)
+        cv2.imwrite(str(vape_dir / "images" / f"{stem}.png"), img)
+        (vape_dir / "labels" / f"{stem}.txt").write_text("0 0.5 0.5 0.4 0.4\n", encoding="utf-8")
+        split_val = "val" if i == 0 else ("test" if i == 1 else "unassigned")
+        manifest_rows.append(
+            json.dumps({"filename": f"{stem}.png", "source": "rf", "split": split_val})
+        )
+    (vape_dir / "manifest.jsonl").write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+
+    # Place a decoy zip next to it to verify `vape_yolo/` folder takes priority
+    decoy_zip = drive_dir / "puff pile.v1i.yolo26.zip"
+    with zipfile.ZipFile(decoy_zip, "w") as zf:
+        zf.writestr("README.txt", "decoy zip that should not be selected")
+
+    class _FakeSam:
+        def predict(self, _image: np.ndarray, bboxes: list[list[float]], verbose: bool = False):
+            del verbose
+            poly = np.array([[10.0, 10.0], [50.0, 10.0], [50.0, 45.0]], dtype=np.float32)
+            return [SimpleNamespace(masks=SimpleNamespace(xy=[poly for _ in bboxes]))]
+
+    work_dir = tmp_path / "work_unzipped"
+    yaml_path = prepare_and_train_from_drive(
+        drive_dir=drive_dir,
+        work_dir=work_dir,
+        sam_model=_FakeSam(),
+        skip_train=True,
+    )
+    assert yaml_path == work_dir / "vape_yolo_seg" / "data.yaml"
+    assert (drive_dir / "vape_yolo_seg_cache.zip").is_file()
+    assert (work_dir / "vape_yolo_seg" / "images" / "val" / "vape_00.png").is_file()
+    assert (work_dir / "vape_yolo_seg" / "images" / "test" / "vape_01.png").is_file()
+
+
+def test_assign_vape_manifest_splits_handles_all_six_standardized_sources() -> None:
+    from leukerbad.dataset.colab_train import assign_vape_manifest_splits
+
+    entries = [
+        # 1. kaggle_test_manual has source_split="train" in Roboflow export -> MUST go to "test"!
+        {
+            "image": "images/kaggle_test_manual__01.jpg",
+            "source_id": "kaggle_test_manual",
+            "source_split": "train",
+            "origin_group": "kaggle_test/01",
+            "negative": False,
+            "split": None,
+        },
+        # 2. roboflow_primary test + burst/flip sibling in train -> both go to "test"
+        {
+            "image": "images/roboflow_primary__IMG_6482_a.jpg",
+            "source_id": "roboflow_primary",
+            "source_split": "test",
+            "origin_group": "roboflow_primary/IMG_6482_JPG_jpg",
+            "negative": False,
+            "split": None,
+        },
+        {
+            "image": "images/roboflow_primary__IMG_6482_b.jpg",
+            "source_id": "roboflow_primary",
+            "source_split": "train",
+            "origin_group": "roboflow_primary/IMG_6482_JPG_jpg",
+            "negative": False,
+            "split": None,
+        },
+        # 3. manual_photos test -> "test"; manual_photos train 3x aug groups stay together!
+        {
+            "image": "images/manual_photos__test_01.jpg",
+            "source_id": "manual_photos",
+            "source_split": "test",
+            "origin_group": "manual_photos/test_01",
+            "negative": False,
+            "split": None,
+        },
+    ]
+    # Add 6 manual_photos train groups x 3 augs each
+    for g_idx in range(6):
+        for aug_idx in range(3):
+            entries.append(
+                {
+                    "image": f"images/manual_photos__g{g_idx}_aug{aug_idx}.jpg",
+                    "source_id": "manual_photos",
+                    "source_split": "train",
+                    "origin_group": f"manual_photos/g{g_idx}",
+                    "negative": g_idx == 0,
+                    "split": None,
+                }
+            )
+    # Add 8 open_images_negatives ("validation_source") -> split across train/val/test
+    for oi_idx in range(8):
+        entries.append(
+            {
+                "image": f"images/open_images_negatives__pen_{oi_idx}.jpg",
+                "source_image": f"public_data/raw/open_images_v7_negatives/images/pen/{oi_idx}.jpg",
+                "source_id": "open_images_negatives",
+                "source_split": "validation_source",
+                "origin_group": f"open_images/pen_{oi_idx}",
+                "negative": True,
+                "split": None,
+            }
+        )
+
+    splits = assign_vape_manifest_splits(entries, seed=42)
+    assert splits["kaggle_test_manual__01.jpg"] == "test"
+    assert splits["roboflow_primary__IMG_6482_a.jpg"] == "test"
+    assert splits["roboflow_primary__IMG_6482_b.jpg"] == "test"
+    assert splits["manual_photos__test_01.jpg"] == "test"
+
+    # Every manual_photos train group must keep all 3 augmentations in the exact same split
+    for g_idx in range(6):
+        group_splits = {splits[f"manual_photos__g{g_idx}_aug{a}.jpg"] for a in range(3)}
+        assert len(group_splits) == 1
+
+    # open_images_negatives must not dump 100% into val; must populate train, val, and test
+    oi_splits = {splits[f"open_images_negatives__pen_{i}.jpg"] for i in range(8)}
+    assert oi_splits == {"train", "val", "test"}
