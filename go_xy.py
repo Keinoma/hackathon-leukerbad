@@ -1,6 +1,7 @@
 import sys, time
 import numpy as np
 from common import *
+from utils import *
 from urdf_ik import SO101Kin
 
 
@@ -56,6 +57,9 @@ try:
 
     input("Entrée pour bouger (Ctrl+C pour annuler)...")
     move_to(robot, dict(zip(ARM, sol)), duration_s=DUREE)
+
+    descend_z(robot, kin, MARGE)
+
     time.sleep(1.0)
     if common.WAIT is not None:
         move_to(robot, common.WAIT)

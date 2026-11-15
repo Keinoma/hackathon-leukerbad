@@ -5,11 +5,8 @@ from common import *
 from utils import *
 from urdf_ik import SO101Kin
 
-# Orientation de la pince : angle (deg) = shoulder_pan + ROLL_SIGN * wrist_roll
-# (wrist_roll = 0 -> la pince est orientée comme le bras ; l'angle passé en argument vaut alors shoulder_pan).
-# Si la pince tourne du mauvais côté, passe ROLL_SIGN à -1.0. ROLL_OFFSET (deg) sert au réglage fin.
-ROLL_SIGN = -1.0
-ROLL_OFFSET = 10.0
+
+ROLL_OFFSET = 19.0
 
 # Sécurités assouplies pour les essais
 IK_TOL = 0.025            # m : erreur IK tolérée (5 mm avant)
@@ -21,10 +18,20 @@ GRIPPER_DUREE = 1.0    # durée (s) de l'ouverture / fermeture
 
 if len(sys.argv) < 4:
     raise SystemExit("Usage : python pick_rota.py x y angle   (x, y en mètres, angle en degrés)")
+ANGLE_given = float(sys.argv[3])
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
-ANGLE = float(sys.argv[3])                      # degrés : orientation de la pince (0 = bras devant, pan = 0 et roll = 0)
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
+x_robot = x_org + x
+y_robot = y_org + y
+
+ANGLE_rayon = np.degrees(np.arctan2(y_robot, x_robot))
+ANGLE_to_assign = ANGLE_given - ANGLE_rayon
+
+print(f"Angle demandé : {ANGLE_given:.2f}°")
+print(f"Angle du rayon : {ANGLE_rayon:.2f}°")
+print(f"Angle relatif de la pince : {ANGLE_to_assign:.2f}°")
+
 robot = connect()
 
 
@@ -68,13 +75,30 @@ try:
 
     # --- wrist_roll pour obtenir l'orientation demandée : ANGLE = pan + ROLL_SIGN * roll ---
     i_pan, i_roll = ARM.index("shoulder_pan"), ARM.index("wrist_roll")
-    roll = ROLL_SIGN * (ANGLE - sol[i_pan]) + ROLL_OFFSET
+    roll = ANGLE_to_assign + ROLL_OFFSET
     roll = (roll + 90.0) % 180.0 - 90.0           # la pince est symétrique : on ramène dans [-90, 90)
-    candidats = [r for r in (roll, roll - 180.0, roll + 180.0) if kin.lo[i_roll] <= r <= kin.hi[i_roll]]
+    candidats = [
+    r for r in (roll, roll - 180.0, roll + 180.0)
+    if kin.lo[i_roll] <= r <= kin.hi[i_roll]
+    ]
+    candidats = [
+    r for r in (roll, roll - 180.0, roll + 180.0)
+    if kin.lo[i_roll] <= r <= kin.hi[i_roll]
+    ]
+
     if not candidats:
-        raise SystemExit(f"REFUSÉ : wrist_roll = {roll:.1f} deg hors des limites [{kin.lo[i_roll]:.0f}, {kin.hi[i_roll]:.0f}].")
+        raise SystemExit(
+            f"REFUSÉ : wrist_roll = {roll:.1f} deg "
+            f"hors des limites [{kin.lo[i_roll]:.0f}, {kin.hi[i_roll]:.0f}]."
+        )
+
     sol[i_roll] = min(candidats, key=abs)
-    print(f"orientation demandée {ANGLE:.1f} deg avec shoulder_pan = {sol[i_pan]:.1f} -> wrist_roll = {sol[i_roll]:.1f} deg")
+
+    print(
+        f"orientation demandée {ANGLE_given:.1f} deg "
+        f"avec angle du rayon = {ANGLE_rayon:.1f} deg "
+        f"-> wrist_roll = {sol[i_roll]:.1f} deg"
+    )
     delta = sol - q_now
     print("pose actuelle (deg):", dict(zip(ARM, np.round(q_now, 1))), "xyz =", np.round(p_now, 3))
     print("pose cible    (deg):", dict(zip(ARM, np.round(sol, 1))), "xyz =", np.round(target, 3))

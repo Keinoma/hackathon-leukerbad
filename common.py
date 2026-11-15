@@ -8,7 +8,7 @@ ROBOT_ID = "my_follower"             # <- le même id qu'à la calibration
 URDF = r"C:\Projets\so101xy\so101_new_calib.urdf"
 Z_K = 0.0
 X_K = 5.0
-WRIST_K = 8.0
+WRIST_K = 8.0 
 
 MARGE = 0.05         # 2 cm au-dessus de la table
 MAX_DELTA_DEG = 270  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible

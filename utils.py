@@ -137,9 +137,15 @@ def move_z(robot, kin, dz, steps=20, duration_s=None, z_min=None, max_err=0.005)
 
 def descend_z(robot, kin, hauteur, **kw):
     """Descend de `hauteur` mètres (valeur positive)."""
-    move_z(robot, kin, -abs(hauteur), **kw)
+    move_z(robot, kin, -abs(hauteur)+0.007, **kw)
 
 
 def rise_z(robot, kin, hauteur, **kw):
     """Monte de `hauteur` mètres (valeur positive)."""
     move_z(robot, kin, abs(hauteur), **kw)
+
+
+
+if __name__ == "__main__":
+    print(np.arcsin(1))
+    print(np.arcsin(1.5))
