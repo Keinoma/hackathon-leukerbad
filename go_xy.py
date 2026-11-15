@@ -9,10 +9,10 @@ MAX_TILT_DEG = 3.0   # écart toléré par rapport à la verticale (pince point�
 DUREE = None         # None = durée automatique (voir PEAK_SPEED_DEG_S dans common.py)
 
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
-
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 robot = connect()
+
 import common
 try:
     if common.WAIT is not None:
@@ -23,7 +23,7 @@ try:
     q = read_joints(robot)
     q_now = np.array([q[j] for j in ARM])
     p_now = kin.fk(q_now)[:3, 3]
-    target = [x_org + x, y_org + y, z_table + MARGE]   # repère robot
+    target = [x_org + x, y_org + y, z_table + MARGE - Z_K * (x**2 + y**2)]   # repère robot
     print(f"point demandé (repère table) = ({x:.3f}, {y:.3f})  ->  repère robot = ({target[0]:.3f}, {target[1]:.3f})")
 
     # --- vérifications de cohérence (après une recalibration, les anciennes valeurs ne valent plus rien) ---

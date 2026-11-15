@@ -6,6 +6,7 @@ from urdf_ik import ARM
 PORT = "COM11"
 ROBOT_ID = "my_follower"             # <- le même id qu'à la calibration
 URDF = r"C:\Projets\so101xy\so101_new_calib.urdf"
+Z_K = 5.0
 
 
 REST = {'shoulder_pan': -22.2, 'shoulder_lift': -102.8, 'elbow_flex': 61.5, 'wrist_flex': 92.0, 'wrist_roll': -0.9}
