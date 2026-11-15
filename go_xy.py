@@ -3,18 +3,15 @@ import numpy as np
 from common import *
 from urdf_ik import SO101Kin
 
-
-Z_TABLE = 0.0        # <- valeur mesurée avec measure_z.py
-X_ORIGIN = 0.232     # <- position (repère du robot, en m) qui devient le point (0, 0) de ta table
-Y_ORIGIN = 0.03       # <- à mesurer avec measure_z.py (pince posée sur ton point d'origine)
-MARGE = 0.0        # 2 cm au-dessus de la table
-MAX_DELTA_DEG = 270  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible
+MARGE = 0.02         # 2 cm au-dessus de la table
+MAX_DELTA_DEG = 100  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible
 MAX_TILT_DEG = 3.0   # écart toléré par rapport à la verticale (pince pointée vers le bas)
 DUREE = None         # None = durée automatique (voir PEAK_SPEED_DEG_S dans common.py)
 
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
 
 kin = SO101Kin(URDF)
+x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 robot = connect()
 import common
 try:
@@ -26,8 +23,18 @@ try:
     q = read_joints(robot)
     q_now = np.array([q[j] for j in ARM])
     p_now = kin.fk(q_now)[:3, 3]
-    target = [X_ORIGIN + x, Y_ORIGIN + y, Z_TABLE + MARGE]   # repère robot
+    target = [x_org + x, y_org + y, z_table + MARGE]   # repère robot
     print(f"point demandé (repère table) = ({x:.3f}, {y:.3f})  ->  repère robot = ({target[0]:.3f}, {target[1]:.3f})")
+
+    # --- vérifications de cohérence (après une recalibration, les anciennes valeurs ne valent plus rien) ---
+    for j, a, lo, hi in zip(ARM, q_now, kin.lo, kin.hi):
+        if a < lo - 5 or a > hi + 5:
+            print(f"ATTENTION : {j} lit {a:.1f} deg, hors des limites du modèle [{lo:.0f}, {hi:.0f}] : "
+                  "calibration incohérente ou OFFSETS périmés.")
+    if np.hypot(target[0], target[1]) > 0.5 or abs(target[2]) > 0.5:
+        raise SystemExit(f"REFUSÉ : la cible est à {np.hypot(target[0], target[1])*1000:.0f} mm de la base. "
+                         "Le bras ne dépasse pas ~400 mm : vérifie que ORIGIN et tes arguments "
+                         "sont bien en MÈTRES.")
 
     sol, err, tilt = kin.ik_down(target, q_now)
     delta = sol - q_now

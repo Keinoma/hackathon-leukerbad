@@ -7,14 +7,10 @@ PORT = "COM11"
 ROBOT_ID = "my_follower"             # <- le même id qu'à la calibration
 URDF = r"C:\Projets\so101xy\so101_new_calib.urdf"
 
-# Pose de repos (bras replié, qui tient tout seul). À remplir avec read_pose.py, par exemple :
-# REST = {"shoulder_pan": 0.0, "shoulder_lift": -98.0, "elbow_flex": 96.0,
-#         "wrist_flex": 70.0, "wrist_roll": 0.0}
-REST = None
 
-# Pose d'attente au-dessus de la scène (optionnelle, à remplir avec record_pose.py)
-WAIT = {'shoulder_pan': -14.8, 'shoulder_lift': -113.5, 'elbow_flex': 46.1, 'wrist_flex': -16.8, 'wrist_roll': -5.7}
-
+REST = {'shoulder_pan': -22.2, 'shoulder_lift': -102.8, 'elbow_flex': 61.5, 'wrist_flex': 92.0, 'wrist_roll': -0.9}
+WAIT = {'shoulder_pan': -18.9, 'shoulder_lift': -34.5, 'elbow_flex': 8.9, 'wrist_flex': 69.1, 'wrist_roll': -0.8}
+ORIGIN = {'shoulder_pan': -22.4, 'shoulder_lift': 26.0, 'elbow_flex': -1.4, 'wrist_flex': 73.1, 'wrist_roll': -1.0}
 
 def connect():
     # use_degrees=True : angles en degrés comme dans l'URDF
@@ -25,11 +21,10 @@ def connect():
     return robot
 
 
-# Corrections d'offset (degrés) : angle_modèle = lecture_robot + OFFSET.
-OFFSETS = {} # à mesurer avec calib_vertical.py
+OFFSETS = {}
 
-# Offset appliqué UNIQUEMENT à la commande 
-CMD_OFFSETS = {}
+# Offset appliqué UNIQUEMENT à la commande
+CMD_OFFSETS = {"wrist_flex": 0.0}
 
 
 def read_joints(robot, raw=False):
@@ -37,6 +32,12 @@ def read_joints(robot, raw=False):
     obs = robot.get_observation()
     return {j: obs[f"{j}.pos"] + (0.0 if raw else OFFSETS.get(j, 0.0)) for j in ARM + ["gripper"]}
 
+def origin_xyz(kin):
+    """(x_origin, y_origin, z_table) en repère robot, calculés depuis la pose ORIGIN."""
+    if ORIGIN is None:
+        raise SystemExit("ORIGIN n'est pas défini dans common.py (utilise record_pose.py, "
+                         "pince posée sur le point (0, 0) de la table).")
+    return tuple(kin.fk([ORIGIN[j] for j in ARM])[:3, 3])
 
 # Réglages de vitesse
 PEAK_SPEED_DEG_S = 90.0   # vitesse de pointe visée (deg/s) : augmente pour aller plus vite
