@@ -6,12 +6,18 @@ from urdf_ik import ARM
 PORT = "COM11"
 ROBOT_ID = "my_follower"             # <- le même id qu'à la calibration
 URDF = r"C:\Projets\so101xy\so101_new_calib.urdf"
-Z_K = 5.0
+Z_K = 4.0
+WRIST_K = 8.0 
 
+MARGE = 0.02         # 2 cm au-dessus de la table
+MAX_DELTA_DEG = 270  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible
+MAX_TILT_DEG = 3.0   # écart toléré par rapport à la verticale (pince pointée vers le bas)
+DUREE = None         # None = durée automatique (voir PEAK_SPEED_DEG_S dans common.py)
 
-REST = {'shoulder_pan': -22.2, 'shoulder_lift': -102.8, 'elbow_flex': 61.5, 'wrist_flex': 92.0, 'wrist_roll': -0.9}
+REST = {'shoulder_pan': -22.2, 'shoulder_lift': -102.8, 'elbow_flex': 61.5, 'wrist_flex': 92.0, 'wrist_roll': -0.9, 'gripper': 0.0}
 WAIT = {'shoulder_pan': -18.9, 'shoulder_lift': -34.5, 'elbow_flex': 8.9, 'wrist_flex': 69.1, 'wrist_roll': -0.8}
 ORIGIN = {'shoulder_pan': -22.4, 'shoulder_lift': 26.0, 'elbow_flex': -1.4, 'wrist_flex': 73.1, 'wrist_roll': -1.0}
+LEO = {'shoulder_pan': -91.7, 'shoulder_lift': 11.1, 'elbow_flex': 3.4, 'wrist_flex': -72.2, 'wrist_roll': -1.0}
 
 def connect():
     # use_degrees=True : angles en degrés comme dans l'URDF

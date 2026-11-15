@@ -3,10 +3,7 @@ import numpy as np
 from common import *
 from urdf_ik import SO101Kin
 
-MARGE = 0.02         # 2 cm au-dessus de la table
-MAX_DELTA_DEG = 100  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible
-MAX_TILT_DEG = 3.0   # écart toléré par rapport à la verticale (pince pointée vers le bas)
-DUREE = None         # None = durée automatique (voir PEAK_SPEED_DEG_S dans common.py)
+
 
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
 kin = SO101Kin(URDF)
@@ -37,6 +34,10 @@ try:
                          "sont bien en MÈTRES.")
 
     sol, err, tilt = kin.ik_down(target, q_now)
+    sol = np.array(sol, dtype=float)
+    wrist_corr = WRIST_K * (x**2 + y**2)
+    sol[ARM.index("wrist_flex")] += wrist_corr
+    print(f"correction wrist_flex = {wrist_corr:+.2f} deg (WRIST_K = {WRIST_K})")
     delta = sol - q_now
     print("pose actuelle (deg):", dict(zip(ARM, np.round(q_now, 1))), "xyz =", np.round(p_now, 3))
     print("pose cible    (deg):", dict(zip(ARM, np.round(sol, 1))), "xyz =", np.round(target, 3))
