@@ -3,6 +3,7 @@ import numpy as np
 from common import *
 from urdf_ik import SO101Kin
 
+# AVEC ROTA
 
 # Pince (échelle 0-100 de LeRobot : 0 = fermée, 100 = ouverte) -> À AJUSTER selon ton robot / l'objet
 GRIPPER_OPEN = 50.0    # ouverture avant la saisie
