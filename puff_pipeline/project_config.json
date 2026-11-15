@@ -1,0 +1,31 @@
+{
+  "schema": "puff_sort_project_v1",
+  "units": {
+    "length": "mm",
+    "angle": "deg"
+  },
+  "frames": {
+    "table": {
+      "axes": ["x_right", "y_away_from_base", "z_up"],
+      "origin": "validated_reference_grasp_tcp"
+    },
+    "robot_base": "SO-101 base frame"
+  },
+  "canonical_components": {
+    "kinematics": "so101_ik.py",
+    "vision_and_visual_servo": "puff_vision.py",
+    "grasp_planning_and_execution": "robust_pick.py",
+    "component_contracts": "puff_interfaces.py",
+    "simulation_environment": "sim_pick/grasp_env.py",
+    "simulation_model": "sim_pick/vendor/mujoco_menagerie/robotstudio_so101/so101.xml"
+  },
+  "calibrations": {
+    "follower": "calibrations/follower/mon_bras.json",
+    "wrist_camera": "real_transfer/wrist_servo_calibration.json",
+    "grasp_reference": "real_transfer/teleop_grasp_pose.json"
+  },
+  "hardware_execution": {
+    "enabled_by_default": false,
+    "required_cli_flag": "--hardware"
+  }
+}
