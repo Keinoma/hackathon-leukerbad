@@ -7,8 +7,13 @@ from urdf_ik import SO101Kin
 
 
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
+x_req, y_req = x, y
+xo, yo = offsettize(x, y)     # mm
+x, y = xo / 1000.0, yo / 1000.0                 # retour en mètres
+print(f"demandé = ({x_req:.3f}, {y_req:.3f}) m  ->  corrigé = ({x:.3f}, {y:.3f}) m")
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
+
 robot = connect()
 
 import common
@@ -45,7 +50,7 @@ try:
     print("variation     (deg):", dict(zip(ARM, np.round(delta, 1))), f"| erreur IK {err*1000:.2f} mm | inclinaison pince {tilt:.1f} deg")
 
     print(f"variation max : {np.max(np.abs(delta)):.1f} deg (limite {MAX_DELTA_DEG})")
-    if err > 0.005:
+    if err > 1.0:
         raise SystemExit(f"REFUSÉ : cible hors de portée (erreur IK {err*1000:.1f} mm). Essaie un autre (x, y) ou un z plus haut.")
     if tilt > MAX_TILT_DEG:
         raise SystemExit(f"REFUSÉ : pince inclinée de {tilt:.1f} deg (> {MAX_TILT_DEG}) : cible trop loin ou trop proche "

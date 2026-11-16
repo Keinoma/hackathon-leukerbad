@@ -13,6 +13,8 @@ GRIPPER_CLOSED = 0.0   # fermeture sur l'objet (mets 0 si tu veux fermer à fond
 GRIPPER_DUREE = 1.0    # durée (s) de l'ouverture / fermeture
 
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
+x = x/1000.0
+y = y/1000.0
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 robot = connect()

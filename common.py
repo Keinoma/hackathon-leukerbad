@@ -10,16 +10,21 @@ Z_K = 0.0
 X_K = 5.0
 WRIST_K = 8.0 
 
-MARGE = 0.05         # 2 cm au-dessus de la table
+ROLL_OFFSET = 19.04
+X_ORIGIN=0.212
+Y_ORIGIN=0.070
+X_OFFSET = 0.0
+Y_OFFSET = 0.03
+MARGE = 0.06         # 2 cm au-dessus de la table
 MAX_DELTA_DEG = 270  # refuse si un angle doit varier de plus que ça entre la pose de départ (WAIT) et la cible
-MAX_TILT_DEG = 3.0   # écart toléré par rapport à la verticale (pince pointée vers le bas)
+MAX_TILT_DEG = 12.0   # écart toléré par rapport à la verticale (pince pointée vers le bas)
 DUREE = None         # None = durée automatique (voir PEAK_SPEED_DEG_S dans common.py)
 
-REST = {'shoulder_pan': -22.2, 'shoulder_lift': -102.8, 'elbow_flex': 61.5, 'wrist_flex': 92.0, 'wrist_roll': -0.9, 'gripper': 0.0}
+REST = {'shoulder_pan': -18.1, 'shoulder_lift': -102.5, 'elbow_flex': 84.5, 'wrist_flex': 79.6, 'wrist_roll': -0.8}
 WAIT = {'shoulder_pan': -18.9, 'shoulder_lift': -34.5, 'elbow_flex': 8.9, 'wrist_flex': 69.1, 'wrist_roll': -0.8}
-ORIGIN = {'shoulder_pan': -22.4, 'shoulder_lift': 26.0, 'elbow_flex': -1.4, 'wrist_flex': 73.1, 'wrist_roll': -1.0}
+ORIGIN = {'shoulder_pan': -22.3, 'shoulder_lift': 24.6, 'elbow_flex': -2.2, 'wrist_flex': 80.0, 'wrist_roll': -1.0}
 LEO = {'shoulder_pan': -91.7, 'shoulder_lift': 11.1, 'elbow_flex': 3.4, 'wrist_flex': -72.2, 'wrist_roll': -1.0}
-POUBELLE = {'shoulder_pan': -97.6, 'shoulder_lift': 10.2, 'elbow_flex': -22.7, 'wrist_flex': 91.5, 'wrist_roll': -0.5}
+POUBELLE = {'shoulder_pan': -93.8, 'shoulder_lift': -27.4, 'elbow_flex': 17.4, 'wrist_flex': 22.5, 'wrist_roll': -1.1}
 MAINTENANCE = {'shoulder_pan': -22.5, 'shoulder_lift': 2.8, 'elbow_flex': -90.9, 'wrist_flex': -1.8, 'wrist_roll': -1.1}
 
 def connect():

@@ -145,7 +145,24 @@ def rise_z(robot, kin, hauteur, **kw):
     move_z(robot, kin, abs(hauteur), **kw)
 
 
+import numpy as np
+
+# (vecteur de compensation normalisé, facteur) par quadrant -- unités : mm
+CORR = {
+    (True,  True):  ((0.4100,  0.9121), 0.306),   # x>0, y>0
+    (False, True):  ((-0.5727, -0.8197), 0.183),  # x<0, y>0
+    (True,  False): ((0.9757,  0.2194), 0.657),   # x>0, y<0
+    (False, False): ((0.9388, -0.3444), 0.343),   # x<0, y<0
+}
+
+def offsettize(x, y):
+    """x, y en mm (repère table). Renvoie la position corrigée en mm."""
+    (vx, vy), facteur = CORR[(x > 0, y > 0)]
+    dist = np.hypot(x, y)
+    return (x + vx * dist * facteur,
+            y + vy * dist * facteur)
+
 
 if __name__ == "__main__":
-    print(np.arcsin(1))
-    print(np.arcsin(1.5))
+    h_g = (0.421129552, 0.906282883)
+    print(h_g[1])

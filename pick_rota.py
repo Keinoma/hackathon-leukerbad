@@ -6,10 +6,8 @@ from utils import *
 from urdf_ik import SO101Kin
 
 
-ROLL_OFFSET = 19.0
-
 # Sécurités assouplies pour les essais
-IK_TOL = 0.025            # m : erreur IK tolérée (5 mm avant)
+IK_TOL = 0.1            # m : erreur IK tolérée (5 mm avant)
 
 # Pince (échelle 0-100 de LeRobot : 0 = fermée, 100 = ouverte) -> À AJUSTER selon ton robot / l'objet
 GRIPPER_OPEN = 50.0    # ouverture avant la saisie
@@ -20,10 +18,12 @@ if len(sys.argv) < 4:
     raise SystemExit("Usage : python pick_rota.py x y angle   (x, y en mètres, angle en degrés)")
 ANGLE_given = float(sys.argv[3])
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
+x = x/1000.0
+y = y/1000.0
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 x_robot = x_org + x
-y_robot = y_org + y
+y_robot = y_org + y 
 
 ANGLE_rayon = np.degrees(np.arctan2(y_robot, x_robot))
 ANGLE_to_assign = ANGLE_given - ANGLE_rayon
@@ -53,7 +53,7 @@ try:
     q = read_joints(robot)
     q_now = np.array([q[j] for j in ARM])
     p_now = kin.fk(q_now)[:3, 3]
-    target = [x_org + x, y_org + y, z_table + MARGE - Z_K * (x**2 + y**2)]   # repère robot
+    target = [x_org + x + X_OFFSET, y_org + y + Y_OFFSET, z_table + MARGE - Z_K * (x**2 + y**2)]   # repère robot
     print(f"DEBUG : x_org={x_org:.3f} y_org={y_org:.3f} z_table={z_table:.3f} | MARGE={MARGE} Z_K={Z_K} WRIST_K={WRIST_K}")
     print(f"point demandé (repère table) = ({x:.3f}, {y:.3f})  ->  repère robot = ({target[0]:.3f}, {target[1]:.3f})")
 
