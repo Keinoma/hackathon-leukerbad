@@ -18,8 +18,9 @@ if len(sys.argv) < 4:
     raise SystemExit("Usage : python pick_rota.py x y angle   (x, y en mètres, angle en degrés)")
 ANGLE_given = float(sys.argv[3])
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
-x = x/1000.0
-y = y/1000.0
+x_req, y_req = x, y
+xo, yo = offsettize(x, y)     # mm
+x, y = xo / 1000.0, yo / 1000.0    
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
 x_robot = x_org + x
