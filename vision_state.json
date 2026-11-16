@@ -1,6 +1,6 @@
 {
-  "request_id": "c2e79a3a-1ef3-4b98-a325-579baf09036e",
-  "created_at_unix": 1794819683.8222272,
+  "request_id": "7ab608c6-8bc7-4691-86e4-9ff65b2632c9",
+  "created_at_unix": 1794827341.5967138,
   "state": "empty",
   "coordinate_frame": "paper_mm",
   "origin": "clicked_mark",
@@ -17,6 +17,6 @@
   ],
   "lens_corrected": false,
   "target": null,
-  "timestamp": 1794819683.8222272,
-  "frame_id": 1198
+  "timestamp": 1794827341.5967138,
+  "frame_id": 627
 }
