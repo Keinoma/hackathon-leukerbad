@@ -1,3 +1,18 @@
+# Automatic shared vision state
+
+Run the calibrated camera as usual. JSON now updates after every analysed frame,
+with the highest-confidence valid segmented puff inside the workspace. No keypress
+is needed. `--json-out target.json` keeps the existing path; without that option a
+calibrated camera writes `vision_state.json`.
+
+The file contains `frame_id`, Unix `timestamp`, `state`, and `target` with `x_mm`,
+`y_mm`, `theta_deg`, `width_mm`, and `confidence`. No valid puff (or normal program
+exit) writes `target: null`. Updates replace the file atomically.
+
+The robot's main program reads a fresh snapshot when ready to pick, runs its action,
+then reads a new snapshot. Frame/request IDs are observations, not robot commands.
+Reject stale timestamps (e.g. older than 2 seconds) in case vision crashes or stops.
+
 # AUKEY: preview, calibrate, export
 
 ## Lens curvature correction (once per camera/settings)

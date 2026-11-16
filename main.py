@@ -2,6 +2,7 @@ import json
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TARGET_FILE = Path("target.json")
@@ -21,7 +22,16 @@ def load_target(path=TARGET_FILE):
         except json.JSONDecodeError as e:
             raise SystemExit(f"{path} n'est pas un JSON valide : {e}")
 
-    # dict unique ou liste de mesures
+    # Shared vision state: unwrap the current target before reading coordinates.
+    if isinstance(data, dict) and "target" in data:
+        if data.get("state") != "ready" or not isinstance(data["target"], dict):
+            raise SystemExit("Aucune puff valide dans l'état de vision actuel.")
+        timestamp = data.get("timestamp", data.get("created_at_unix"))
+        if not isinstance(timestamp, (int, float)) or not 0 <= time.time() - timestamp <= 2:
+            raise SystemExit("Mesure de vision périmée : relancer ou vérifier la caméra.")
+        data = data["target"]
+
+    # Ancien format : dict unique ou liste de mesures.
     measures = data if isinstance(data, list) else [data]
     measures = [m for m in measures if m.get("confidence", 1.0) >= MIN_CONFIDENCE]
     if not measures:
@@ -54,4 +64,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
