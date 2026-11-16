@@ -5,61 +5,100 @@ import sys
 import time
 from pathlib import Path
 
-TARGET_FILE = Path("target.json")
+TARGET_FILE = Path("vision_state.json")
 SCRIPT = "pick_rota.py"
-MIN_CONFIDENCE = 0.0     # monte à 0.8 par exemple pour ignorer les mesures douteuses
-MM_TO_M = 1 / 1000.0     # pick_rota.py attend des mètres (cf. "x, y = ... # mètres")
+MIN_CONFIDENCE = 0.0
+MM_TO_M = 1 / 1000.0
+
+POLL_S = 0.2          # période de lecture du json
+SETTLE_S = 1.5        # pause après un pick, le temps que la caméra se remette à jour
+MAX_FAILURES = 3      # échecs consécutifs avant arrêt complet
+
+
+class NoTarget(Exception):
+    """Pas de cible exploitable pour l'instant (situation normale, on réessaie)."""
 
 
 def load_target(path=TARGET_FILE):
-    """Lit le json et renvoie (x_mm, y_mm, theta_deg)."""
+    """Renvoie (x_mm, y_mm, theta_deg, timestamp) ou lève NoTarget."""
     if not path.exists():
-        raise SystemExit(f"{path} introuvable.")
+        raise NoTarget(f"{path} introuvable")
 
-    with open(path, encoding="utf-8") as f:
-        try:
+    try:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise SystemExit(f"{path} n'est pas un JSON valide : {e}")
+    except json.JSONDecodeError:
+        # fichier en cours d'écriture par le script de vision : on réessaiera
+        raise NoTarget("JSON illisible (écriture en cours ?)")
 
-    # Shared vision state: unwrap the current target before reading coordinates.
+    timestamp = None
     if isinstance(data, dict) and "target" in data:
         if data.get("state") != "ready" or not isinstance(data["target"], dict):
-            raise SystemExit("Aucune puff valide dans l'état de vision actuel.")
+            raise NoTarget("aucune puff valide dans l'état de vision")
         timestamp = data.get("timestamp", data.get("created_at_unix"))
         if not isinstance(timestamp, (int, float)) or not 0 <= time.time() - timestamp <= 2:
-            raise SystemExit("Mesure de vision périmée : relancer ou vérifier la caméra.")
+            raise NoTarget("mesure de vision périmée")
         data = data["target"]
 
-    # Ancien format : dict unique ou liste de mesures.
     measures = data if isinstance(data, list) else [data]
     measures = [m for m in measures if m.get("confidence", 1.0) >= MIN_CONFIDENCE]
     if not measures:
-        raise SystemExit(f"Aucune mesure exploitable dans {path} (confiance >= {MIN_CONFIDENCE}).")
+        raise NoTarget(f"aucune mesure avec confiance >= {MIN_CONFIDENCE}")
 
     try:
         x = statistics.median(m["x_mm"] for m in measures)
         y = statistics.median(m["y_mm"] for m in measures)
         theta = statistics.median(m["theta_deg"] for m in measures)
     except KeyError as e:
-        raise SystemExit(f"Clé manquante dans {path} : {e}")
+        raise NoTarget(f"clé manquante : {e}")
 
-    print(f"{len(measures)} mesure(s) -> x = {x:.2f} mm, y = {y:.2f} mm, theta = {theta:.2f} deg")
-    return x, y, theta
+    return x, y, theta, timestamp
+
+
+def run_pick(x_mm, y_mm, theta):
+    cmd = [sys.executable, SCRIPT,
+           f"{x_mm * MM_TO_M:.6f}", f"{y_mm * MM_TO_M:.6f}", f"{theta:.2f}"]
+    print("Lancement :", " ".join(cmd))
+    return subprocess.run(cmd).returncode
 
 
 def main():
-    x_mm, y_mm, theta = load_target()
+    last_pick_end = 0.0
+    failures = 0
+    last_msg = None
+    print("Surveillance de", TARGET_FILE, "(Ctrl+C pour arrêter)")
 
-    cmd = [
-        sys.executable, SCRIPT,
-        f"{x_mm * MM_TO_M:.6f}",
-        f"{y_mm * MM_TO_M:.6f}",
-        f"{theta:.2f}",
-    ]
-    print("Lancement :", " ".join(cmd))
-    result = subprocess.run(cmd)
-    sys.exit(result.returncode)
+    try:
+        while True:
+            try:
+                x_mm, y_mm, theta, ts = load_target()
+            except NoTarget as e:
+                if str(e) != last_msg:          # évite de spammer la console
+                    print("En attente :", e)
+                    last_msg = str(e)
+                time.sleep(POLL_S)
+                continue
+
+            last_msg = None
+            if ts is not None and ts <= last_pick_end:
+                time.sleep(POLL_S)               # mesure antérieure au dernier pick : ignorée
+                continue
+
+            print(f"Cible : x = {x_mm:.2f} mm, y = {y_mm:.2f} mm, theta = {theta:.2f} deg")
+            rc = run_pick(x_mm, y_mm, theta)
+            last_pick_end = time.time()
+
+            if rc == 0:
+                failures = 0
+            else:
+                failures += 1
+                print(f"pick_rota.py a échoué (code {rc}), échec {failures}/{MAX_FAILURES}")
+                if failures >= MAX_FAILURES:
+                    raise SystemExit("Trop d'échecs consécutifs, arrêt.")
+
+            time.sleep(SETTLE_S)
+    except KeyboardInterrupt:
+        print("\nArrêt demandé.")
 
 
 if __name__ == "__main__":

@@ -18,8 +18,7 @@ if len(sys.argv) < 4:
     raise SystemExit("Usage : python pick_rota.py x y angle   (x, y en mètres, angle en degrés)")
 ANGLE_given = float(sys.argv[3])
 x, y = float(sys.argv[1]), float(sys.argv[2])   # mètres
-x_req, y_req = x, y
-xo, yo = offsettize(x, y)     # mm
+xo, yo = offsettize(x*1000, y*1000)     # mm
 x, y = xo / 1000.0, yo / 1000.0    
 kin = SO101Kin(URDF)
 x_org, y_org, z_table = origin_xyz(kin)   # repère robot, déduit de la pose ORIGIN
@@ -141,6 +140,7 @@ try:
         move_to(robot, {**common.POUBELLE, "gripper": GRIPPER_CLOSED})
     input("Entrée pour relâcher l'objet et terminer (le bras reviendra au repos)...")
     set_gripper(GRIPPER_OPEN)
+    close_gripper(robot, value=None)
     time.sleep(0.5)
 finally:
     safe_disconnect(robot)
