@@ -7,7 +7,7 @@ from pathlib import Path
 
 TARGET_FILE = Path("vision_state.json")
 SCRIPT = "pick_rota.py"
-MIN_CONFIDENCE = 0.0
+MIN_CONFIDENCE = 0.60
 MM_TO_M = 1 / 1000.0
 
 POLL_S = 0.2          # période de lecture du json
@@ -27,7 +27,7 @@ def load_target(path=TARGET_FILE):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         # fichier en cours d'écriture par le script de vision : on réessaiera
         raise NoTarget("JSON illisible (écriture en cours ?)")
 
@@ -41,7 +41,7 @@ def load_target(path=TARGET_FILE):
         data = data["target"]
 
     measures = data if isinstance(data, list) else [data]
-    measures = [m for m in measures if m.get("confidence", 1.0) >= MIN_CONFIDENCE]
+    measures = [m for m in measures if m.get("confidence", 0.0) >= MIN_CONFIDENCE]
     if not measures:
         raise NoTarget(f"aucune mesure avec confiance >= {MIN_CONFIDENCE}")
 

@@ -29,7 +29,7 @@ case "${1:-run}" in
             --calibrate 385 280 --calibration workspace.json --rotate 180 ;;
     run)
         "$uv_bin" run --extra ml leukerbad-detect --camera "$camera_index" \
-            --weights models/vape_seg.pt --device cpu --conf 0.5 \
+            --weights models/vape_seg.pt --device cpu --conf 0.60 \
             --calibration workspace.json --json-out target.json ;;
     *) print "Usage: ./AUKEY.command [lens|preview|calibrate|run]"; exit 1 ;;
 esac

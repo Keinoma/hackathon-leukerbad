@@ -9,7 +9,7 @@ export UV_PROJECT_ENVIRONMENT=/private/tmp/vape-detector-runtime
 "$uv_bin" run --offline --extra ml leukerbad-detect \
     --camera "${1:-0}" \
     --weights ../runs_local/vape_yolo26_handphotos/weights/best.pt \
-    --segment-weights models/vape_seg.pt --conf 0.25 --device cpu
+    --segment-weights models/vape_seg.pt --conf 0.60 --device cpu
 result=$?
 if (( result != 0 )); then
     read "?Press Enter to close."

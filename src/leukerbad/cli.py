@@ -92,6 +92,7 @@ def run_camera(args, detector) -> None:
         print(f"Camera {args.camera} open. Press s to save a snapshot; q to quit.", flush=True)
         last_report = 0.0
         failed_since = None
+        last_json_error = 0.0
         while True:
             ok, frame = frames.read()
             if not ok:
@@ -122,8 +123,14 @@ def run_camera(args, detector) -> None:
                 annotated = draw_workspace(annotated, calibration, targets)
                 if json_out is not None:
                     frame_id += 1
-                    export_target(json_out, calibration, (frame.shape[1], frame.shape[0]),
-                                  detections, polygons, frame_id=frame_id)
+                    try:
+                        export_target(json_out, calibration, (frame.shape[1], frame.shape[0]),
+                                      detections, polygons, frame_id=frame_id)
+                    except OSError as error:
+                        if time.monotonic() - last_json_error > 2:
+                            print(f"JSON update delayed ({Path(json_out).resolve()}): {error}. "
+                                  "Camera continues; retrying next frame.", flush=True)
+                            last_json_error = time.monotonic()
             fps = 1.0 / max(time.monotonic() - start, 1e-6)
             cv2.putText(
                 annotated, f"{fps:.1f} FPS | JSON: auto | s: save | q: quit"
@@ -153,8 +160,12 @@ def run_camera(args, detector) -> None:
                 break
     finally:
         if json_out is not None and calibration is not None:
-            export_target(json_out, calibration, calibration["image_size"], [], {},
-                          frame_id=frame_id)
+            try:
+                export_target(json_out, calibration, calibration["image_size"], [], {},
+                              frame_id=frame_id)
+            except OSError as error:
+                print(f"Could not clear JSON on exit: {error}. Reader must reject stale timestamps.",
+                      flush=True)
         if frames is not None:
             frames.close()
         camera.release()
@@ -169,7 +180,7 @@ def main() -> None:
     parser.add_argument("--weights", type=Path, default=Path("models/vape_seg.pt"))
     parser.add_argument("--segment-weights", type=Path,
                         help="Optional segmentation model to add masks to local detections")
-    parser.add_argument("--conf", type=float, default=0.25)
+    parser.add_argument("--conf", type=float, default=0.60)
     parser.add_argument("--save", type=Path, help="Annotated image output (image mode)")
     parser.add_argument("--snapshots", type=Path, default=Path("snapshots"))
     parser.add_argument("--device", default="auto", help="auto, cpu, mps, or CUDA index")

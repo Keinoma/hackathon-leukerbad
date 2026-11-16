@@ -14,7 +14,7 @@ if [[ -z "$uv_bin" ]]; then
     exit 1
 fi
 "$uv_bin" run --offline --extra ml leukerbad-detect \
-    --camera "${1:-0}" --weights models/vape_seg.pt --conf 0.25
+    --camera "${1:-0}" --weights models/vape_seg.pt --conf 0.60
 result=$?
 if (( result != 0 )); then
     print "See the error above. For camera errors, check the connection, close other"

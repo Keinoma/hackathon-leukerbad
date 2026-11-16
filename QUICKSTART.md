@@ -122,8 +122,17 @@ On Windows use the Python CLI instead of `.command`:
 ```powershell
 uv sync --extra ml
 uv run --extra ml leukerbad-detect --camera 0 --calibrate 385 280 --calibration workspace.json
-uv run --extra ml leukerbad-detect --camera 0 --weights models/vape_seg.pt --device cpu --conf 0.5 --calibration workspace.json --json-out target.json
+uv run --extra ml leukerbad-detect --camera 0 --weights models/vape_seg.pt --device cpu --conf 0.60 --calibration workspace.json --json-out target.json
 ```
 
 Calibrate on the actual demo camera and PC; do not transfer the Mac calibration
 to a different view. Windows hardware has not been tested here.
+
+## Windows JSON sharing
+
+The writer retries temporary access-denied errors while replacing the complete
+JSON snapshot. A persistent lock logs a warning and skips that update; the camera
+continues. The robot reader closes the file after each read and retries temporary
+read errors. Both publisher and robot reader require confidence >= 0.60. Old
+timestamps remain invalid after two seconds. Keep consumer reads short, using
+`with open(...)`, rather than holding the JSON file open during robot movement.

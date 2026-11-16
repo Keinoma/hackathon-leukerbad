@@ -22,7 +22,16 @@ def write_json(path, data):
                                          delete=False) as stream:
             temporary = Path(stream.name)
             json.dump(data, stream, indent=2, allow_nan=False)
-        os.replace(temporary, path)
+        # Windows readers/antivirus may temporarily deny replacement of an open file.
+        # Never truncate the existing snapshot: retry the same atomic replacement.
+        for attempt in range(6):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -274,6 +283,7 @@ def draw_workspace(image, calibration, targets=()):
 
 def export_target(path, calibration, image_size, detections, polygons, frame_id=None):
     targets = measure_targets(calibration, image_size, detections, polygons)
+    targets = [item for item in targets if detections[item["index"]].confidence >= 0.60]
     target = max(targets, key=lambda item: item["confidence"]) if targets else None
     if target is not None:
         target = {key: value for key, value in target.items() if key != "index"}
