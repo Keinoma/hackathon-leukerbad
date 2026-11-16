@@ -41,7 +41,7 @@ def set_gripper(value):
 
 try:
     if common.WAIT is not None:
-        input("Entrée pour aller à la pose d'attente WAIT (Ctrl+C pour annuler)...")
+        # input("Entrée pour aller à la pose d'attente WAIT (Ctrl+C pour annuler)...")
         move_to(robot, common.WAIT)
         time.sleep(0.5)
 
@@ -120,11 +120,11 @@ try:
                          "ou augmente MAX_DELTA_DEG.")
 
     # Rotation du poignet seule, depuis WAIT, avant d'amorcer la descente
-    input("Entrée pour orienter le poignet (wrist_roll) (Ctrl+C pour annuler)...")
+    # input("Entrée pour orienter le poignet (wrist_roll) (Ctrl+C pour annuler)...")
     move_to(robot, {"wrist_roll": sol[ARM.index("wrist_roll")]})
     time.sleep(0.5)
 
-    input("Entrée pour descendre saisir l'objet (Ctrl+C pour annuler)...")
+    # input("Entrée pour descendre saisir l'objet (Ctrl+C pour annuler)...")
     move_to(robot, dict(zip(ARM, sol)), duration_s=DUREE)   # la pince reste ouverte pendant la descente
     time.sleep(0.5)
 
@@ -138,7 +138,7 @@ try:
         move_to(robot, {**common.WAIT, "gripper": GRIPPER_CLOSED})
     if common.POUBELLE is not None:
         move_to(robot, {**common.POUBELLE, "gripper": GRIPPER_CLOSED})
-    input("Entrée pour relâcher l'objet et terminer (le bras reviendra au repos)...")
+    # input("Entrée pour relâcher l'objet et terminer (le bras reviendra au repos)...")
     set_gripper(GRIPPER_OPEN)
     close_gripper(robot, value=None)
     time.sleep(0.5)
