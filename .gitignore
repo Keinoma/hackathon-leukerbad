@@ -17,7 +17,7 @@ venv/
 # ML artifacts and local data
 data/
 datasets/
-models/
+models/*
 runs/
 *.pt
 *.onnx
@@ -36,3 +36,20 @@ runs/
 
 # Logs
 *.log
+
+# Local inference output and package caches
+.uv-cache/
+.ultralytics/
+snapshots/
+annotated*.png
+
+# Local calibration and manual JSON snapshot
+workspace.json
+workspace.json.bak
+target.json
+lens.json
+
+# Share the checkpoint used by the demo; other models remain local.
+!models/vape_seg.pt
+!models/README.md
+!models/training_args.yaml
