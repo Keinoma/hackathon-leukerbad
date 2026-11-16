@@ -65,10 +65,15 @@ def run_camera(args, detector) -> None:
     check_workspace_lens(calibration, lens)
     rotation = (calibration.get("rotation_deg", 0)
                 if calibration is not None else getattr(args, "rotate", 0))
+    if calibration is not None and json_out is None:
+        json_out = Path("vision_state.json")
+    frame_id = 0
+    if json_out:
+        print(f"Automatic JSON output: {Path(json_out).resolve()}", flush=True)
     backend = cv2.CAP_AVFOUNDATION if sys.platform == "darwin" else cv2.CAP_ANY
     camera = cv2.VideoCapture(args.camera, backend)
     frames = None
-    title = "Vape detector | j: JSON target | s: snapshot | q: quit"
+    title = "Vape detector | JSON: automatic | s: snapshot | q: quit"
     probe = PositionProbe(calibration) if calibration is not None else None
     if probe is not None:
         title += " | click: position"
@@ -115,9 +120,13 @@ def run_camera(args, detector) -> None:
                 targets = measure_targets(calibration, (frame.shape[1], frame.shape[0]),
                                           detections, polygons)
                 annotated = draw_workspace(annotated, calibration, targets)
+                if json_out is not None:
+                    frame_id += 1
+                    export_target(json_out, calibration, (frame.shape[1], frame.shape[0]),
+                                  detections, polygons, frame_id=frame_id)
             fps = 1.0 / max(time.monotonic() - start, 1e-6)
             cv2.putText(
-                annotated, f"{fps:.1f} FPS | j: JSON | s: save | q: quit"
+                annotated, f"{fps:.1f} FPS | JSON: auto | s: save | q: quit"
                 + (" | grid: 10 mm" if calibration is not None else ""),
                 (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2,
             )
@@ -140,16 +149,12 @@ def run_camera(args, detector) -> None:
             if key == ord("s"):
                 save_image(next_snapshot(args.snapshots), annotated)
                 report(detections)
-            if key == ord("j"):
-                if json_out is None:
-                    print("Enable JSON with --json-out target.json --calibration workspace.json")
-                else:
-                    payload = export_target(json_out, calibration,
-                                            (frame.shape[1], frame.shape[0]), detections, polygons)
-                    print(f"Wrote {json_out}: {payload}", flush=True)
             if cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        if json_out is not None and calibration is not None:
+            export_target(json_out, calibration, calibration["image_size"], [], {},
+                          frame_id=frame_id)
         if frames is not None:
             frames.close()
         camera.release()
@@ -174,7 +179,7 @@ def main() -> None:
     parser.add_argument("--calibrate", type=float, nargs=2, metavar=("WIDTH_MM", "HEIGHT_MM"),
                         help="Click four corners and the origin mark; t rotates the calibration view")
     parser.add_argument("--calibration", type=Path, default=Path("workspace.json"))
-    parser.add_argument("--json-out", type=Path, help="Press j in the camera window to write one target")
+    parser.add_argument("--json-out", type=Path, help="Continuously write the best valid puff to this JSON file")
     parser.add_argument("--lens-file", type=Path, default=Path("lens.json"),
                         help="Automatically apply measured lens correction when this file exists")
     parser.add_argument("--lens-calibrate", action="store_true",

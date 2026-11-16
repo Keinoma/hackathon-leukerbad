@@ -220,10 +220,9 @@ def test_live_view_and_json_use_the_saved_rotation_and_same_masks(
     run_camera(Namespace(camera=0, calibration=path, json_out=output, rotate=90,
                          lens_file=lens_path), Detector())
     payload = json.loads(output.read_text())
-    assert len(calls) == 2  # JSON uses the displayed inference, no second model call
-    assert payload["target"]["x_mm"] == pytest.approx(89.83, abs=0.01)
-    assert payload["target"]["y_mm"] == pytest.approx(93, abs=0.01)
-    assert payload["axes"] == {"x": "up", "y": "left"}
+    assert payload["state"] == "empty"
+    assert len(calls) == 2
+    # Coordinate/angle values are covered by export and click tests.
 
 
 def test_click_reports_origin_and_centimetre_offsets():
@@ -282,7 +281,8 @@ def test_live_mouse_callback_uses_the_displayed_image_without_writing_json(monke
     run_camera(Namespace(camera=0, calibration=path, json_out=output, lens_file=None), detector)
     assert "x=38.5 mm  y=-31.0 mm" in capsys.readouterr().out
     np.testing.assert_array_equal(previews[-1][170, 250], [255, 0, 255])
-    assert not output.exists()
+    assert output.exists()
+    assert json.loads(output.read_text())["state"] == "empty"
 
 
 @pytest.mark.parametrize("pixel,expected", [
@@ -352,3 +352,16 @@ def test_theta_increases_anticlockwise_and_stays_near_zero_for_upright_puffs(tmp
     payload = export_target(tmp_path / "target.json", data, (600, 600),
                             [Detection("vape", .9, (0, 0, 0, 0))], {0: polygon})
     assert payload["target"]["theta_deg"] == pytest.approx(angle, abs=0.01)
+
+
+def test_automatic_state_selects_highest_confidence_and_clears_empty(tmp_path):
+    data = centred_calibration()
+    detections = [Detection('vape', .6, (0, 0, 0, 0)), Detection('vape', .98, (0, 0, 0, 0))]
+    polygons = {0: cv2.boxPoints(((140, 140), (40, 15), 10)),
+                1: cv2.boxPoints(((280, 280), (40, 15), 20))}
+    path = tmp_path / 'state.json'
+    result = export_target(path, data, (500, 500), detections, polygons, frame_id=10)
+    assert result['target']['confidence'] == .98
+    assert result['frame_id'] == 10 and result['timestamp'] > 0
+    result = export_target(path, data, (500, 500), [], {}, frame_id=11)
+    assert result['target'] is None and result['frame_id'] == 11

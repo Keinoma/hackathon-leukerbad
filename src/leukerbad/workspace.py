@@ -272,9 +272,9 @@ def draw_workspace(image, calibration, targets=()):
     return result
 
 
-def export_target(path, calibration, image_size, detections, polygons):
+def export_target(path, calibration, image_size, detections, polygons, frame_id=None):
     targets = measure_targets(calibration, image_size, detections, polygons)
-    target = min(targets, key=lambda item: (item["y_mm"], item["x_mm"])) if targets else None
+    target = max(targets, key=lambda item: item["confidence"]) if targets else None
     if target is not None:
         target = {key: value for key, value in target.items() if key != "index"}
     payload = {"request_id": str(uuid4()), "created_at_unix": time.time(),
@@ -289,5 +289,8 @@ def export_target(path, calibration, image_size, detections, polygons):
                "theta_range_deg": [-90, 90] if "origin_px" in calibration else [0, 180],
                "lens_corrected": calibration.get("lens_id") is not None,
                "target": target}
+    payload["timestamp"] = payload["created_at_unix"]
+    if frame_id is not None:
+        payload["frame_id"] = frame_id
     write_json(path, payload)
     return payload
