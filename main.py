@@ -5,8 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-TARGET_FILE = Path("vision_state.json")
-SCRIPT = "pick_rota.py"
+TARGET_FILE = Path(__file__).resolve().parent / "vision_state.json"
+ROBOT_DIR = Path(__file__).resolve().parent / "FAIRE BOUGER ROBOT"
+SCRIPT = ROBOT_DIR / "pick_rota.py"
 MIN_CONFIDENCE = 0.60
 MM_TO_M = 1 / 1000.0
 
@@ -56,10 +57,10 @@ def load_target(path=TARGET_FILE):
 
 
 def run_pick(x_mm, y_mm, theta):
-    cmd = [sys.executable, SCRIPT,
+    cmd = [sys.executable, str(SCRIPT),
            f"{x_mm * MM_TO_M:.6f}", f"{y_mm * MM_TO_M:.6f}", f"{theta:.2f}"]
     print("Lancement :", " ".join(cmd))
-    return subprocess.run(cmd).returncode
+    return subprocess.run(cmd, cwd=ROBOT_DIR).returncode
 
 
 def main():
